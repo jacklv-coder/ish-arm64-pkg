@@ -192,12 +192,13 @@ public final class IshInstance: @unchecked Sendable {
     /// Spawn a streaming session.
     public func spawn(_ opts: IshSpawnOptions) throws -> IshSession {
         let r = try currentRaw()
+        let tty = opts.allocateTTY
         return try withCSpawnOpts(opts) { cOpts in
             var sess: OpaquePointer? = nil
             let rc = ish_embed_spawn(r, cOpts, &sess)
             if rc != ishOK { throw IshError.from(rc) }
             guard let sess = sess else { throw IshError.from(ishErrInternal) }
-            return IshSession(raw: sess)
+            return IshSession(raw: sess, isTTY: tty)
         }
     }
 
@@ -254,8 +255,17 @@ public final class IshInstance: @unchecked Sendable {
 public final class IshSession: @unchecked Sendable {
     private var raw: OpaquePointer?
     private let lock = NSLock()
+    /// True if the session was spawned with allocateTTY = true. In that
+    /// case the supervisor wired the child to a pty, so Ctrl+C and other
+    /// terminal-style signals must be delivered as control bytes on the
+    /// stdin pipe (the kernel tty layer turns them into pgrp signals),
+    /// not as guest-side `kill -SIGINT` which would hit the shell itself.
+    private let isTTY: Bool
 
-    init(raw: OpaquePointer) { self.raw = raw }
+    init(raw: OpaquePointer, isTTY: Bool = false) {
+        self.raw = raw
+        self.isTTY = isTTY
+    }
 
     deinit {
         if let r = raw { ish_embed_session_close(r) }
@@ -308,13 +318,32 @@ public final class IshSession: @unchecked Sendable {
     }
 
     /// Send a signal (standard Linux signum). Use 2 for SIGINT (Ctrl+C).
+    ///
+    /// In TTY mode, common terminal-control signals are translated into
+    /// the matching control byte written to stdin (e.g. SIGINT → ^C =
+    /// 0x03). The kernel tty layer turns them into a signal sent to the
+    /// foreground process group, which is what an interactive shell
+    /// expects. Sending SIGINT directly to the session pgid would kill
+    /// the shell itself.
     public func signal(_ signum: Int32) throws {
+        if isTTY {
+            switch signum {
+            case 2:  // SIGINT  → ^C
+                try write(Data([0x03])); return
+            case 3:  // SIGQUIT → ^\
+                try write(Data([0x1c])); return
+            case 20: // SIGTSTP → ^Z
+                try write(Data([0x1a])); return
+            default: break // fall through to direct signal for everything else
+            }
+        }
         let r = try currentRaw()
         let rc = ish_embed_session_signal(r, signum)
         if rc != ishOK { throw IshError.from(rc) }
     }
 
-    /// Convenience: SIGINT.
+    /// Convenience: SIGINT (Ctrl+C). In TTY mode this is a control byte
+    /// to the pty master, otherwise a direct kill(-pgid, SIGINT).
     public func interrupt() throws { try signal(2) }
 
     /// SIGTERM, then SIGKILL after grace.

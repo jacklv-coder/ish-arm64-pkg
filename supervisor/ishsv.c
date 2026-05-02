@@ -71,6 +71,7 @@ struct session {
     int       term_signal;
     int       reaped;
     int       merge_stderr;
+    int       is_tty;     /* stdin_fd == stdout_fd == pty master */
     /* SIGTERM sent at this monotonic-ish counter (poll-tick units); 0 = none */
     int       term_grace_ticks;
 };
@@ -174,8 +175,12 @@ static struct session *alloc_session(uint32_t id) {
 }
 
 static void free_session(struct session *s) {
-    if (s->stdin_fd  >= 0) close(s->stdin_fd);
-    if (s->stdout_fd >= 0) close(s->stdout_fd);
+    /* In TTY mode stdin_fd == stdout_fd (both point at the pty master).
+     * Avoid the double close — second one would EBADF and could race
+     * the kernel reusing that fd number. */
+    int closed_stdin = -1;
+    if (s->stdin_fd  >= 0) { close(s->stdin_fd);  closed_stdin = s->stdin_fd; }
+    if (s->stdout_fd >= 0 && s->stdout_fd != closed_stdin) close(s->stdout_fd);
     if (s->stderr_fd >= 0) close(s->stderr_fd);
     memset(s, 0, sizeof(*s));
 }
@@ -281,7 +286,10 @@ static int do_spawn(uint32_t sid, uint8_t flags, const uint8_t *p, uint32_t plen
         emit_error(sid, EAGAIN, "max sessions reached");
         return -1;
     }
+    int want_tty = (flags & ISH_FF_TTY) ? 1 : 0;
     s->merge_stderr = (flags & ISH_FF_MERGE_STDERR) ? 1 : 0;
+    s->is_tty = want_tty;
+    if (want_tty) s->merge_stderr = 1; /* TTY collapses stdout+stderr */
 
     struct spawn_args sa;
     if (parse_spawn_payload(p, plen, &sa) < 0) {
@@ -297,30 +305,78 @@ static int do_spawn(uint32_t sid, uint8_t flags, const uint8_t *p, uint32_t plen
         return -1;
     }
 
+    /* Pipe / PTY allocation.
+     *
+     * Pipe mode (default):
+     *   in_pipe[0]  = child stdin reader     (parent writes to in_pipe[1])
+     *   out_pipe[1] = child stdout writer    (parent reads out_pipe[0])
+     *   err_pipe[1] = child stderr writer    (parent reads err_pipe[0])
+     *
+     * PTY mode (ISH_FF_TTY):
+     *   pty_master  = parent side, both reader and writer
+     *   pty_slave   = child stdin/stdout/stderr (single fd, dup2'd to 0,1,2)
+     *
+     *   In PTY mode the kernel's tty layer handles Ctrl+C: bytes written
+     *   to the master with the host pretending to be a terminal user
+     *   (e.g. 0x03 for SIGINT) are turned into signals delivered to the
+     *   foreground process group, leaving the shell itself alive.
+     */
     int in_pipe[2]  = {-1, -1};
     int out_pipe[2] = {-1, -1};
     int err_pipe[2] = {-1, -1};
+    int pty_master = -1, pty_slave = -1;
 
-    if (pipe(in_pipe) < 0 || pipe(out_pipe) < 0 ||
-        (!s->merge_stderr && pipe(err_pipe) < 0)) {
-        emit_error(sid, errno, "pipe() failed");
-        if (in_pipe[0] >= 0) close(in_pipe[0]);
-        if (in_pipe[1] >= 0) close(in_pipe[1]);
-        if (out_pipe[0] >= 0) close(out_pipe[0]);
-        if (out_pipe[1] >= 0) close(out_pipe[1]);
-        if (err_pipe[0] >= 0) close(err_pipe[0]);
-        if (err_pipe[1] >= 0) close(err_pipe[1]);
-        free_spawn_args(&sa);
-        free_session(s);
-        return -1;
+    if (want_tty) {
+        pty_master = posix_openpt(O_RDWR | O_NOCTTY);
+        if (pty_master < 0 || grantpt(pty_master) < 0 || unlockpt(pty_master) < 0) {
+            emit_error(sid, errno, "openpt failed");
+            if (pty_master >= 0) close(pty_master);
+            free_spawn_args(&sa);
+            free_session(s);
+            return -1;
+        }
+        const char *slave_name = ptsname(pty_master);
+        if (!slave_name) {
+            emit_error(sid, errno, "ptsname failed");
+            close(pty_master);
+            free_spawn_args(&sa);
+            free_session(s);
+            return -1;
+        }
+        pty_slave = open(slave_name, O_RDWR | O_NOCTTY);
+        if (pty_slave < 0) {
+            emit_error(sid, errno, "pty slave open failed");
+            close(pty_master);
+            free_spawn_args(&sa);
+            free_session(s);
+            return -1;
+        }
+    } else {
+        if (pipe(in_pipe) < 0 || pipe(out_pipe) < 0 ||
+            (!s->merge_stderr && pipe(err_pipe) < 0)) {
+            emit_error(sid, errno, "pipe() failed");
+            if (in_pipe[0] >= 0) close(in_pipe[0]);
+            if (in_pipe[1] >= 0) close(in_pipe[1]);
+            if (out_pipe[0] >= 0) close(out_pipe[0]);
+            if (out_pipe[1] >= 0) close(out_pipe[1]);
+            if (err_pipe[0] >= 0) close(err_pipe[0]);
+            if (err_pipe[1] >= 0) close(err_pipe[1]);
+            free_spawn_args(&sa);
+            free_session(s);
+            return -1;
+        }
     }
 
     pid_t pid = fork();
     if (pid < 0) {
         emit_error(sid, errno, "fork() failed");
-        close(in_pipe[0]);  close(in_pipe[1]);
-        close(out_pipe[0]); close(out_pipe[1]);
-        if (!s->merge_stderr) { close(err_pipe[0]); close(err_pipe[1]); }
+        if (want_tty) {
+            close(pty_master); close(pty_slave);
+        } else {
+            close(in_pipe[0]);  close(in_pipe[1]);
+            close(out_pipe[0]); close(out_pipe[1]);
+            if (!s->merge_stderr) { close(err_pipe[0]); close(err_pipe[1]); }
+        }
         free_spawn_args(&sa);
         free_session(s);
         return -1;
@@ -328,6 +384,26 @@ static int do_spawn(uint32_t sid, uint8_t flags, const uint8_t *p, uint32_t plen
 
     if (pid == 0) {
         /* child */
+        if (want_tty) {
+            /* Become session leader and acquire the slave as the
+             * controlling tty. setsid() detaches from any inherited
+             * session/tty; the first open(O_NOCTTY-clear) of a tty
+             * after setsid attaches it as controlling. */
+            setsid();
+            /* Wire stdin/stdout/stderr to the slave. Keep the slave fd
+             * itself around long enough to TIOCSCTTY. */
+            dup2(pty_slave, 0);
+            dup2(pty_slave, 1);
+            dup2(pty_slave, 2);
+#ifdef TIOCSCTTY
+            ioctl(pty_slave, TIOCSCTTY, 0);
+#endif
+            close(pty_master);
+            if (pty_slave > 2) close(pty_slave);
+            for (int fd = 3; fd < 256; fd++) close(fd);
+            goto child_post_io;
+        }
+
         setpgid(0, 0);
 
         /* wire stdin */
@@ -345,6 +421,8 @@ static int do_spawn(uint32_t sid, uint8_t flags, const uint8_t *p, uint32_t plen
         close(in_pipe[0]);  close(in_pipe[1]);
         close(out_pipe[0]); close(out_pipe[1]);
         if (!s->merge_stderr) { close(err_pipe[0]); close(err_pipe[1]); }
+
+    child_post_io:;
 
         /* iSH FD limit is ~256; close everything from 3..256 in case the
          * parent's CLOEXEC slipped. */
@@ -395,20 +473,30 @@ static int do_spawn(uint32_t sid, uint8_t flags, const uint8_t *p, uint32_t plen
     }
 
     /* parent */
-    close(in_pipe[0]);
-    close(out_pipe[1]);
-    if (!s->merge_stderr) close(err_pipe[1]);
+    if (want_tty) {
+        close(pty_slave);
+        set_cloexec(pty_master);
+        set_nonblock(pty_master);
+        s->pid       = pid;
+        s->stdin_fd  = pty_master;  /* parent writes guest input here */
+        s->stdout_fd = pty_master;  /* and reads guest output from the same fd */
+        s->stderr_fd = -1;          /* tty merges stderr into stdout */
+    } else {
+        close(in_pipe[0]);
+        close(out_pipe[1]);
+        if (!s->merge_stderr) close(err_pipe[1]);
 
-    set_cloexec(in_pipe[1]);
-    set_cloexec(out_pipe[0]);
-    if (!s->merge_stderr) set_cloexec(err_pipe[0]);
-    set_nonblock(out_pipe[0]);
-    if (!s->merge_stderr) set_nonblock(err_pipe[0]);
+        set_cloexec(in_pipe[1]);
+        set_cloexec(out_pipe[0]);
+        if (!s->merge_stderr) set_cloexec(err_pipe[0]);
+        set_nonblock(out_pipe[0]);
+        if (!s->merge_stderr) set_nonblock(err_pipe[0]);
 
-    s->pid       = pid;
-    s->stdin_fd  = in_pipe[1];
-    s->stdout_fd = out_pipe[0];
-    s->stderr_fd = s->merge_stderr ? -1 : err_pipe[0];
+        s->pid       = pid;
+        s->stdin_fd  = in_pipe[1];
+        s->stdout_fd = out_pipe[0];
+        s->stderr_fd = s->merge_stderr ? -1 : err_pipe[0];
+    }
 
     /* SPAWNED event */
     uint8_t pidbuf[4];
@@ -504,16 +592,26 @@ static void drain_session_streams_and_handle_exit(void) {
                         emit_frame(kind == ISH_STREAM_STDOUT ? ISH_FT_STDOUT_DATA : ISH_FT_STDERR_DATA,
                                    ISH_FF_SEQ_PRESENT, s->id, buf, (uint32_t)(8 + r));
                     } else if (r == 0) {
-                        /* EOF on this stream */
-                        if (kind == ISH_STREAM_STDOUT) { close(s->stdout_fd); s->stdout_fd = -1; }
-                        else                            { close(s->stderr_fd); s->stderr_fd = -1; }
+                        /* EOF on this stream. In TTY mode the same fd
+                         * is both stdin and stdout; clear stdin too so
+                         * we don't try to write to a dead pty. */
+                        if (kind == ISH_STREAM_STDOUT) {
+                            if (s->is_tty && s->stdin_fd == s->stdout_fd) s->stdin_fd = -1;
+                            close(s->stdout_fd); s->stdout_fd = -1;
+                        } else {
+                            close(s->stderr_fd); s->stderr_fd = -1;
+                        }
                         break;
                     } else {
                         if (errno == EAGAIN || errno == EWOULDBLOCK) break;
                         if (errno == EINTR) continue;
                         /* hard error: drop the fd */
-                        if (kind == ISH_STREAM_STDOUT) { close(s->stdout_fd); s->stdout_fd = -1; }
-                        else                            { close(s->stderr_fd); s->stderr_fd = -1; }
+                        if (kind == ISH_STREAM_STDOUT) {
+                            if (s->is_tty && s->stdin_fd == s->stdout_fd) s->stdin_fd = -1;
+                            close(s->stdout_fd); s->stdout_fd = -1;
+                        } else {
+                            close(s->stderr_fd); s->stderr_fd = -1;
+                        }
                         break;
                     }
                 }
