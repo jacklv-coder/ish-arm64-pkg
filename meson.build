@@ -26,19 +26,19 @@ if ish_src_dir == ''
     error('-Dish_src=<path to iSH source root> is required')
 endif
 
-# iSH internal include paths needed by the FFI shim. iSH source files
-# include their own headers as `kernel/foo.h` etc., so we add ONLY the
-# repo root. Adding `kernel/` or `fs/` directly would let macOS's libc
-# `<time.h>` resolve to `third_party/ish/kernel/time.h` and explode.
-ish_includes = include_directories(
-    ish_src_dir,
-    is_system: true,
-)
-# vdso path is arch-specific; default to x86. (arm64 builds override.)
-ish_vdso_includes = include_directories(
-    ish_src_dir / 'vdso' / get_option('guest_arch'),
-    is_system: true,
-)
+# iSH internal include paths needed by the FFI shim. We pass them as
+# raw -I flags rather than include_directories() because Meson refuses
+# to take an absolute path inside the source tree (the third_party/ish
+# submodule lives inside the project).
+#
+# Use ONLY the repo root; never add `kernel/` or `fs/` here, otherwise
+# macOS's libc `<time.h>` resolves to `third_party/ish/kernel/time.h`
+# and explodes.
+guest_arch = get_option('guest_arch')
+ish_cflags = [
+    '-I' + ish_src_dir,
+    '-I' + ish_src_dir / 'vdso' / guest_arch,
+]
 
 embed_includes = include_directories(
     'include',
@@ -49,15 +49,14 @@ embed_includes = include_directories(
 cc = meson.get_compiler('c')
 threads = dependency('threads')
 
-# guest_arch passthrough: ish_ffi.c includes kernel headers that depend
-# on -DGUEST_X86 / -DGUEST_ARM64. Default to x86 because that's what we
-# ship Alpine i386 rootfs for.
-guest_arch = get_option('guest_arch')
+# ish_ffi.c includes kernel headers that depend on
+# -DGUEST_X86 / -DGUEST_ARM64.
 add_project_arguments('-DGUEST_' + guest_arch.to_upper() + '=1', language: 'c')
 
 libishffi = static_library('ishffi',
     ['ffi/ish_ffi.c'],
-    include_directories: [ish_includes, ish_vdso_includes, embed_includes],
+    include_directories: [embed_includes],
+    c_args: ish_cflags,
     install: false,
 )
 
