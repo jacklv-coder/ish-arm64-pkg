@@ -1,0 +1,4 @@
+module CIshEmbed {
+    header "ishembed.h"
+    export *
+}

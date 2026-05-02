@@ -1,0 +1,18 @@
+# SwiftPM
+.build/
+.swiftpm/
+DerivedData/
+Package.resolved
+*.xcodeproj/xcuserdata/
+
+# Native build outputs
+build/
+*.o
+*.a
+
+# macOS
+.DS_Store
+
+# Don't commit fakefs trees / xcframeworks; they live on Releases.
+*.xcframework/
+fs.tar.gz

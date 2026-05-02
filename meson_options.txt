@@ -1,0 +1,6 @@
+option('ish_src', type: 'string', value: '',
+       description: 'absolute path to iSH source tree')
+option('ish_build', type: 'string', value: '',
+       description: 'absolute path to iSH build directory containing libish.a etc.')
+option('guest_arch', type: 'combo', choices: ['x86', 'arm64'], value: 'x86',
+       description: 'guest architecture iSH was built for')
