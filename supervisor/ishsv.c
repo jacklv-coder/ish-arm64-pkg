@@ -538,10 +538,7 @@ static int do_spawn(uint32_t sid, uint8_t flags, const uint8_t *p, uint32_t plen
              * ONLCR, and SIGINT/SIGQUIT/SIGTSTP from the kernel's
              * line discipline. */
             struct termios tio;
-            int gat_ok = tcgetattr(pty_slave, &tio);
-            unsigned long pre_o = (unsigned long)tio.c_oflag;
-            unsigned long pre_l = (unsigned long)tio.c_lflag;
-            if (gat_ok == 0) {
+            if (tcgetattr(pty_slave, &tio) == 0) {
                 tio.c_iflag |= ICRNL | IXON | IUTF8;
                 tio.c_iflag &= ~(IGNCR | INLCR | IXOFF);
                 tio.c_oflag |= OPOST | ONLCR;
@@ -552,19 +549,7 @@ static int do_spawn(uint32_t sid, uint8_t flags, const uint8_t *p, uint32_t plen
                 tio.c_cflag &= ~(PARENB);
                 cfsetispeed(&tio, B38400);
                 cfsetospeed(&tio, B38400);
-                int set_rc = tcsetattr(pty_slave, TCSANOW, &tio);
-                struct termios verify;
-                tcgetattr(pty_slave, &verify);
-                dprintf(2, "ishsv: pty termios get=%d set=%d "
-                            "pre_oflag=0x%lx pre_lflag=0x%lx "
-                            "post_oflag=0x%lx post_lflag=0x%lx OPOST=0x%x ONLCR=0x%x\n",
-                        gat_ok, set_rc, pre_o, pre_l,
-                        (unsigned long)verify.c_oflag,
-                        (unsigned long)verify.c_lflag,
-                        (unsigned)OPOST, (unsigned)ONLCR);
-            } else {
-                dprintf(2, "ishsv: tcgetattr(pty_slave) failed: %s\n",
-                        strerror(errno));
+                tcsetattr(pty_slave, TCSANOW, &tio);
             }
 
             /* Become session leader and acquire the slave as the
