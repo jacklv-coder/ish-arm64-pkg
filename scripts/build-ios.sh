@@ -85,6 +85,7 @@ EOF
         meson setup "$outdir/ish" "$ISH_SRC" \
             --cross-file="$outdir/cross.ini" \
             -Dengine=asbestos -Dkernel=ish -Dguest_arch=arm64 \
+            -Dlog_handler=stderr \
             -Dwerror=false -Dwarning_level=0
         ninja -C "$outdir/ish" libish.a libish_emu.a libfakefs.a
     )
