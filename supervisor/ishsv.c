@@ -38,6 +38,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <termios.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/ioctl.h>
@@ -524,13 +525,36 @@ static int do_spawn(uint32_t sid, uint8_t flags, const uint8_t *p, uint32_t plen
     if (pid == 0) {
         /* child */
         if (want_tty) {
+            /* Force the slave into a sane "cooked" terminal mode
+             * before exec'ing the shell. iSH's freshly-allocated
+             * pty slaves come up in a state where OPOST / ONLCR
+             * aren't enabled, which means bash's "\n" never gets
+             * post-processed into "\r\n" on output and every line
+             * the host reads is missing the carriage return — the
+             * UI ends up rendering everything on a single overwriting
+             * line. Setting termios explicitly here gets us the
+             * standard sane defaults: canonical input (line buffered
+             * + erase/kill), echo on, output post-processing on with
+             * ONLCR, and SIGINT/SIGQUIT/SIGTSTP from the kernel's
+             * line discipline. */
+            struct termios tio;
+            if (tcgetattr(pty_slave, &tio) == 0) {
+                tio.c_iflag |= ICRNL | IXON | IUTF8;
+                tio.c_iflag &= ~(IGNCR | INLCR | IXOFF);
+                tio.c_oflag |= OPOST | ONLCR;
+                tio.c_oflag &= ~(OCRNL | ONOCR | ONLRET);
+                tio.c_lflag |= ISIG | ICANON | ECHO | ECHOE | ECHOK | ECHOCTL | ECHOKE | IEXTEN;
+                tio.c_lflag &= ~(ECHONL | NOFLSH | TOSTOP);
+                tio.c_cflag |= CS8 | CREAD | HUPCL;
+                tio.c_cflag &= ~(PARENB);
+                cfsetispeed(&tio, B38400);
+                cfsetospeed(&tio, B38400);
+                tcsetattr(pty_slave, TCSANOW, &tio);
+            }
+
             /* Become session leader and acquire the slave as the
-             * controlling tty. setsid() detaches from any inherited
-             * session/tty; the first open(O_NOCTTY-clear) of a tty
-             * after setsid attaches it as controlling. */
+             * controlling tty. */
             setsid();
-            /* Wire stdin/stdout/stderr to the slave. Keep the slave fd
-             * itself around long enough to TIOCSCTTY. */
             dup2(pty_slave, 0);
             dup2(pty_slave, 1);
             dup2(pty_slave, 2);
