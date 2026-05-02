@@ -76,19 +76,24 @@ struct ish_embed_instance {
     int  host_to_guest_w;   /* host writes commands & stdin           */
     int  guest_to_host_r;   /* host reads protocol events             */
     int  guest_log_r;       /* host reads supervisor log (stderr)     */
+    int  kern_log_r;        /* host reads iSH kernel printk (host stderr) */
 
     /* the kernel-side ends; kernel takes ownership but we keep these
      * around for shutdown */
     int  guest_stdin_r;
     int  guest_stdout_w;
     int  guest_stderr_w;
+    int  kern_log_w;        /* duped onto host STDERR_FILENO */
+    int  saved_stderr;      /* original host stderr, restored on shutdown */
 
     pthread_mutex_t writer_lock;     /* serialize writes to control pipe */
 
     pthread_t       reader_thread;
     pthread_t       log_thread;
+    pthread_t       kern_log_thread;
     int             reader_thread_alive;
     int             log_thread_alive;
+    int             kern_log_thread_alive;
 
     pthread_mutex_t sess_lock;
     struct ish_embed_session *sessions_head;
@@ -349,10 +354,30 @@ static void *reader_thread_main(void *arg) {
 
 static void *log_thread_main(void *arg) {
     ish_embed_instance_t *inst = (ish_embed_instance_t *)arg;
-    int dst = inst->kernel_log_fd >= 0 ? inst->kernel_log_fd : 2;
+    int dst = inst->kernel_log_fd >= 0 ? inst->kernel_log_fd
+                                        : (inst->saved_stderr >= 0
+                                           ? inst->saved_stderr : 2);
     uint8_t buf[4096];
     while (!atomic_load(&inst->shutting_down)) {
         ssize_t r = read(inst->guest_log_r, buf, sizeof(buf));
+        if (r > 0) (void)write(dst, buf, (size_t)r);
+        else if (r == 0) break;
+        else if (errno != EINTR) break;
+    }
+    return NULL;
+}
+
+/// Pump iSH-kernel-side fprintf(stderr,...) messages (NETDIAG, panic
+/// chatter, etc.) into the same destination as the supervisor log,
+/// each line prefixed so the consumer can tell them apart.
+static void *kern_log_thread_main(void *arg) {
+    ish_embed_instance_t *inst = (ish_embed_instance_t *)arg;
+    int dst = inst->kernel_log_fd >= 0 ? inst->kernel_log_fd
+                                        : (inst->saved_stderr >= 0
+                                           ? inst->saved_stderr : 2);
+    uint8_t buf[4096];
+    while (!atomic_load(&inst->shutting_down)) {
+        ssize_t r = read(inst->kern_log_r, buf, sizeof(buf));
         if (r > 0) (void)write(dst, buf, (size_t)r);
         else if (r == 0) break;
         else if (errno != EINTR) break;
@@ -398,9 +423,12 @@ int ish_embed_boot(const ish_embed_boot_opts_t *opts,
     inst->host_to_guest_w = -1;
     inst->guest_to_host_r = -1;
     inst->guest_log_r     = -1;
+    inst->kern_log_r      = -1;
     inst->guest_stdin_r   = -1;
     inst->guest_stdout_w  = -1;
     inst->guest_stderr_w  = -1;
+    inst->kern_log_w      = -1;
+    inst->saved_stderr    = -1;
     inst->kernel_log_fd   = opts->kernel_log_fd;
     pthread_mutex_init(&inst->writer_lock, NULL);
     pthread_mutex_init(&inst->sess_lock, NULL);
@@ -410,13 +438,19 @@ int ish_embed_boot(const ish_embed_boot_opts_t *opts,
     atomic_store(&inst->shutting_down, 0);
     atomic_store(&inst->kernel_exited, 0);
 
-    /* create three pipes:
+    /* create four pipes:
      *   p_in:  host writes to host_to_guest_w; guest reads from guest_stdin_r
      *   p_out: guest writes to guest_stdout_w; host reads from guest_to_host_r
      *   p_log: guest writes to guest_stderr_w; host reads from guest_log_r
+     *          (this is the SUPERVISOR's stderr — diagnostic logs from
+     *           PID 1 inside iSH)
+     *   p_kln: dup2'd onto host's STDERR_FILENO; host reads from kern_log_r
+     *          (this captures iSH KERNEL printk — fprintf(stderr,...) from
+     *           inside libish.a, including NETDIAG and panic messages)
      */
-    int p_in[2], p_out[2], p_log[2];
-    if (pipe(p_in) < 0 || pipe(p_out) < 0 || pipe(p_log) < 0) {
+    int p_in[2], p_out[2], p_log[2], p_kln[2];
+    if (pipe(p_in) < 0 || pipe(p_out) < 0 ||
+        pipe(p_log) < 0 || pipe(p_kln) < 0) {
         free(inst);
         pthread_mutex_unlock(&g_instance_lock);
         return ISH_ERR_PIPE;
@@ -427,12 +461,24 @@ int ish_embed_boot(const ish_embed_boot_opts_t *opts,
     inst->guest_stdout_w  = p_out[1];
     inst->guest_log_r     = p_log[0];
     inst->guest_stderr_w  = p_log[1];
+    inst->kern_log_r      = p_kln[0];
+    inst->kern_log_w      = p_kln[1];
 
     set_cloexec_local(inst->host_to_guest_w);
     set_cloexec_local(inst->guest_to_host_r);
     set_cloexec_local(inst->guest_log_r);
+    set_cloexec_local(inst->kern_log_r);
     /* guest_*_r/w are handed to the kernel and become guest-side fds;
      * we keep them in the host process but the kernel "owns" them. */
+
+    /* Redirect host stderr to our kernel-log pipe BEFORE the kernel
+     * pthread starts, so iSH's fprintf(stderr, …) printk hits us. We
+     * keep the original stderr around to restore at shutdown. */
+    inst->saved_stderr = dup(STDERR_FILENO);
+    if (inst->saved_stderr >= 0) set_cloexec_local(inst->saved_stderr);
+    if (dup2(inst->kern_log_w, STDERR_FILENO) < 0) {
+        /* not fatal: kernel log just won't reach us */
+    }
 
     /* ---- iSH kernel boot sequence (mirrors xX_main_Xx) ---- */
     int err;
@@ -493,6 +539,10 @@ int ish_embed_boot(const ish_embed_boot_opts_t *opts,
         err = ISH_ERR_THREAD; goto fail;
     }
     inst->log_thread_alive = 1;
+    if (pthread_create(&inst->kern_log_thread, NULL, kern_log_thread_main, inst) != 0) {
+        err = ISH_ERR_THREAD; goto fail;
+    }
+    inst->kern_log_thread_alive = 1;
 
     /* Send HELLO and wait for HELLO_ACK with a timeout (5s). */
     {
@@ -873,6 +923,19 @@ int ish_embed_shutdown(ish_embed_instance_t *inst, uint32_t grace_ms) {
 
     if (inst->reader_thread_alive) pthread_join(inst->reader_thread, NULL);
     if (inst->log_thread_alive)    pthread_join(inst->log_thread, NULL);
+
+    /* Close the host-stderr-redirect pipe write end and join the kern
+     * log pump so the read end will see EOF. Then restore the original
+     * host stderr so anyone calling fprintf(stderr, ...) post-shutdown
+     * (e.g. system frameworks) doesn't write into a closed pipe. */
+    if (inst->saved_stderr >= 0) {
+        dup2(inst->saved_stderr, STDERR_FILENO);
+        close(inst->saved_stderr);
+        inst->saved_stderr = -1;
+    }
+    if (inst->kern_log_w >= 0) { close(inst->kern_log_w); inst->kern_log_w = -1; }
+    if (inst->kern_log_thread_alive) pthread_join(inst->kern_log_thread, NULL);
+    if (inst->kern_log_r >= 0) { close(inst->kern_log_r); inst->kern_log_r = -1; }
 
     if (inst->guest_to_host_r >= 0) close(inst->guest_to_host_r);
     if (inst->guest_log_r     >= 0) close(inst->guest_log_r);
