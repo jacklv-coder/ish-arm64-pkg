@@ -23,6 +23,9 @@ int must_check user_write_task(struct task *task, addr_t addr, const void *buf, 
 int must_check user_write_task_ptrace(struct task *task, addr_t addr, const void *buf, size_t count);
 int must_check user_read_string(addr_t addr, char *buf, size_t max);
 int must_check user_write_string(addr_t addr, const char *buf);
+#ifdef GUEST_ARM64
+int mem_grow_down_to(struct mem *mem, addr_t addr, int flags);
+#endif
 #define user_get(addr, var) user_read(addr, &(var), sizeof(var))
 #define user_put(addr, var) user_write(addr, &(var), sizeof(var))
 #define user_get_task(task, addr, var) user_read_task(task, addr, &(var), sizeof(var))
