@@ -687,13 +687,14 @@ static void *mem_ptr_nofault(struct mem *mem, addr_t addr, int type) {
 #ifdef GUEST_ARM64
 int mem_grow_down_to(struct mem *mem, addr_t addr, int flags) {
     page_t page = PAGE(addr);
-    page_t p = page;
-    mem_next_page(mem, &p);
-    while (p < MEM_PAGES && mem_pt(mem, p) == NULL)
-        mem_next_page(mem, &p);
-    if (p >= MEM_PAGES)
+    page_t stack_page = STACK_INIT_PAGE;
+    while (stack_page < STACK_TOP_PAGE && mem_pt(mem, stack_page) == NULL)
+        stack_page++;
+    if (stack_page >= STACK_TOP_PAGE)
         return _ENOMEM;
-    if (!(mem_pt(mem, p)->flags & P_GROWSDOWN))
+    if (page >= stack_page)
+        return 0;
+    if (!(mem_pt(mem, stack_page)->flags & P_GROWSDOWN))
         return _ENOMEM;
 
     pages_t guard_page = STACK_TOP_PAGE;
@@ -704,7 +705,7 @@ int mem_grow_down_to(struct mem *mem, addr_t addr, int flags) {
             return _ENOMEM;
     }
 
-    for (page_t grow = p - 1; grow >= page; grow--) {
+    for (page_t grow = stack_page - 1; grow >= page; grow--) {
         if (mem_pt(mem, grow) != NULL)
             continue;
 #if ANON_MMAP_LIMIT_PAGES > 0
