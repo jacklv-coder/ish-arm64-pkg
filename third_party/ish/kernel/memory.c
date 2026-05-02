@@ -705,17 +705,13 @@ int mem_grow_down_to(struct mem *mem, addr_t addr, int flags) {
             return _ENOMEM;
     }
 
-    for (page_t grow = stack_page - 1; grow >= page; grow--) {
-        if (mem_pt(mem, grow) != NULL)
-            continue;
+    if (mem_pt(mem, page) == NULL) {
 #if ANON_MMAP_LIMIT_PAGES > 0
         atomic_fetch_add(&anon_page_count, 1);
 #endif
-        int err = pt_map_nothing(mem, grow, 1, flags | P_GROWSDOWN);
+        int err = pt_map_nothing(mem, page, 1, flags | P_GROWSDOWN);
         if (err < 0)
             return err;
-        if (grow == 0)
-            break;
     }
     return 0;
 }
