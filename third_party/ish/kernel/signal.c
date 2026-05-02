@@ -9,6 +9,10 @@
 #include "kernel/vdso.h"
 #include "emu/interrupt.h"
 
+#ifndef ISH_DEBUG_SKIP_BRK
+#define ISH_DEBUG_SKIP_BRK 0
+#endif
+
 #if is_gcc(9)
 #pragma GCC diagnostic ignored "-Waddress-of-packed-member"
 #endif
@@ -372,7 +376,7 @@ static void receive_signal(struct sighand *sighand, struct siginfo_ *info) {
 
         case SIGNAL_KILL:
             unlock(&sighand->lock); // do_exit must be called without this lock
-#ifdef GUEST_ARM64
+#if defined(GUEST_ARM64) && ISH_DEBUG_SKIP_BRK
             // V8 / JSC / Bun emit `BRK #N` (delivers SIGTRAP to the
             // process) for IMMEDIATE_CRASH(), DCHECK_*, and assorted
             // assertion macros at compile time. For Bun specifically,

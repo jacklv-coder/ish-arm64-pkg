@@ -551,6 +551,8 @@ static int do_spawn(uint32_t sid, uint8_t flags, const uint8_t *p, uint32_t plen
                 cfsetospeed(&tio, B38400);
                 tcsetattr(pty_slave, TCSANOW, &tio);
             }
+            struct winsize ws = { .ws_row = 24, .ws_col = 80 };
+            ioctl(pty_slave, TIOCSWINSZ, &ws);
 
             /* Become session leader and acquire the slave as the
              * controlling tty. */
