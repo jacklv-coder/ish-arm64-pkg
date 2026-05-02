@@ -374,6 +374,17 @@ static void ensure_vm_devices(const char *chroot_path) {
         slogf("ishsv: mount devpts at %s failed: %s\n", p, strerror(errno));
     }
 
+    /* Mount procfs so /proc/self/exe and friends work. Many modern
+     * tools (codex, glibc PATH detection, busybox top, …) read
+     * /proc/self/exe and silently degrade or refuse to start when it
+     * isn't there. Like devpts, procfs is synthetic in iSH and the
+     * supervisor is outside any chroot, so this just works. */
+    snprintf(p, sizeof(p), "%s/proc", chroot_path);
+    mkdir_p(p, 0755);
+    if (mount("proc", p, "proc", 0, NULL) < 0 && errno != EBUSY) {
+        slogf("ishsv: mount procfs at %s failed: %s\n", p, strerror(errno));
+    }
+
     mark_ensured(chroot_path);
 }
 
