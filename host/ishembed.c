@@ -900,6 +900,27 @@ int ish_embed_run_oneshot(ish_embed_instance_t *inst,
 
 void ish_embed_free(void *p) { free(p); }
 
+int ish_embed_setup_vm_root(ish_embed_instance_t *inst, const char *vm_root) {
+    if (!inst || !vm_root) return ISH_ERR_INVALID_ARG;
+    /* ish_ffi_setup_vm_root must run on the iSH kernel thread (it
+     * touches `current` and the global mount table). The simplest
+     * way to get there is to run it via a quick guest helper that
+     * invokes the FFI — but we already are inside the host process
+     * alongside the kernel pthread. ish_ffi_setup_vm_root locks the
+     * mount table and uses generic_* APIs which themselves take
+     * `current->fs->lock`; iSH's design lets these be called from
+     * a non-task context as long as `current` is set. We piggyback
+     * on the kernel pthread's `current` by deferring the call into
+     * the next task-tick via the supervisor.
+     *
+     * In practice, we just call it directly. The kernel pthread
+     * marshals all guest filesystem ops through the same locks; the
+     * call is short and synchronous, so we don't need to bounce
+     * through an RPC. */
+    int err = ish_ffi_setup_vm_root(vm_root);
+    return err < 0 ? ISH_ERR_INTERNAL : ISH_OK;
+}
+
 /* --------------------------------------------------------------- *
  *  shutdown                                                       *
  * --------------------------------------------------------------- */

@@ -41,6 +41,10 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/ioctl.h>
+#include <sys/stat.h>
+#include <sys/mount.h>
+#include <sys/sysmacros.h>  /* makedev */
+#include <limits.h>         /* PATH_MAX */
 #if defined(__linux__)
 #include <sys/prctl.h>
 #endif
@@ -276,6 +280,103 @@ static int set_nonblock(int fd) {
     return fcntl(fd, F_SETFL, f | O_NONBLOCK);
 }
 
+/* Track which chroot roots we've already populated with device nodes
+ * + devpts mount during this supervisor's lifetime, so we don't redo
+ * the work on every spawn into the same VM. */
+static char ensured_vms[SUPERVISOR_MAX_SESSIONS][PATH_MAX];
+static int  ensured_vm_count = 0;
+
+static int already_ensured(const char *root) {
+    for (int i = 0; i < ensured_vm_count; i++)
+        if (strcmp(ensured_vms[i], root) == 0)
+            return 1;
+    return 0;
+}
+
+static void mark_ensured(const char *root) {
+    if (ensured_vm_count >= SUPERVISOR_MAX_SESSIONS) return;
+    snprintf(ensured_vms[ensured_vm_count], sizeof(ensured_vms[0]),
+             "%s", root);
+    ensured_vm_count++;
+}
+
+static int mkdir_p(const char *path, mode_t mode) {
+    if (mkdir(path, mode) == 0 || errno == EEXIST) return 0;
+    /* try to create parents */
+    char tmp[PATH_MAX];
+    snprintf(tmp, sizeof(tmp), "%s", path);
+    for (char *p = tmp + 1; *p; p++) {
+        if (*p == '/') {
+            *p = 0;
+            if (mkdir(tmp, mode) < 0 && errno != EEXIST) {
+                slogf("ishsv: mkdir(%s) failed: %s\n", tmp, strerror(errno));
+                return -1;
+            }
+            *p = '/';
+        }
+    }
+    if (mkdir(tmp, mode) < 0 && errno != EEXIST) {
+        slogf("ishsv: mkdir(%s) failed: %s\n", tmp, strerror(errno));
+        return -1;
+    }
+    return 0;
+}
+
+/* Major/minor numbers iSH uses; mirror fs/devices.h there. We hardcode
+ * because the supervisor is built outside the iSH source tree. */
+#define ISH_DEV_TTY_MAJOR  5
+#define ISH_DEV_MEM_MAJOR  1
+
+static void ensure_node(const char *path, mode_t mode, dev_t dev) {
+    if (mknod(path, mode, dev) < 0 && errno != EEXIST) {
+        slogf("ishsv: mknod(%s) failed: %s\n", path, strerror(errno));
+    }
+}
+
+/* Ensure /dev nodes + devpts mount inside a chroot directory tree.
+ * Idempotent. Called immediately before spawning a TTY child whose
+ * chroot_path is something we haven't seen before. */
+static void ensure_vm_devices(const char *chroot_path) {
+    if (already_ensured(chroot_path)) return;
+    char p[PATH_MAX];
+
+    /* /dev itself + /dev/pts. */
+    snprintf(p, sizeof(p), "%s/dev",     chroot_path); mkdir_p(p, 0755);
+    snprintf(p, sizeof(p), "%s/dev/pts", chroot_path); mkdir_p(p, 0755);
+
+    /* Standard char devices. The major/minor here have to match what
+     * iSH's tty driver registers; mismatched majors mean open() of
+     * the device returns ENXIO. */
+    snprintf(p, sizeof(p), "%s/dev/null",    chroot_path);
+    ensure_node(p, S_IFCHR | 0666, makedev(ISH_DEV_MEM_MAJOR, 3));
+    snprintf(p, sizeof(p), "%s/dev/zero",    chroot_path);
+    ensure_node(p, S_IFCHR | 0666, makedev(ISH_DEV_MEM_MAJOR, 5));
+    snprintf(p, sizeof(p), "%s/dev/full",    chroot_path);
+    ensure_node(p, S_IFCHR | 0666, makedev(ISH_DEV_MEM_MAJOR, 7));
+    snprintf(p, sizeof(p), "%s/dev/random",  chroot_path);
+    ensure_node(p, S_IFCHR | 0666, makedev(ISH_DEV_MEM_MAJOR, 8));
+    snprintf(p, sizeof(p), "%s/dev/urandom", chroot_path);
+    ensure_node(p, S_IFCHR | 0666, makedev(ISH_DEV_MEM_MAJOR, 9));
+    snprintf(p, sizeof(p), "%s/dev/tty",     chroot_path);
+    ensure_node(p, S_IFCHR | 0666, makedev(ISH_DEV_TTY_MAJOR, 0));
+    snprintf(p, sizeof(p), "%s/dev/console", chroot_path);
+    ensure_node(p, S_IFCHR | 0666, makedev(ISH_DEV_TTY_MAJOR, 1));
+    snprintf(p, sizeof(p), "%s/dev/ptmx",    chroot_path);
+    ensure_node(p, S_IFCHR | 0666, makedev(ISH_DEV_TTY_MAJOR, 2));
+
+    /* Mount devpts so /dev/pts/N appears on demand when posix_openpt
+     * allocates. iSH's devptsfs is purely synthetic. The mount happens
+     * outside any chroot (we are PID 1, the supervisor, in the real
+     * fs root), so the V7 chroot-deny patch in sys_mount lets us
+     * through. EBUSY = already mounted = fine. */
+    snprintf(p, sizeof(p), "%s/dev/pts", chroot_path);
+    if (mount("devpts", p, "devpts", 0, NULL) < 0 && errno != EBUSY) {
+        slogf("ishsv: mount devpts at %s failed: %s\n", p, strerror(errno));
+    }
+
+    mark_ensured(chroot_path);
+}
+
 static int do_spawn(uint32_t sid, uint8_t flags, const uint8_t *p, uint32_t plen) {
     if (find_session(sid) != NULL) {
         emit_error(sid, EEXIST, "session id already in use");
@@ -327,16 +428,41 @@ static int do_spawn(uint32_t sid, uint8_t flags, const uint8_t *p, uint32_t plen
     int pty_master = -1, pty_slave = -1;
 
     if (want_tty) {
+        /* If we're spawning into a chrooted VM, make sure that VM has
+         * /dev/ptmx and /dev/pts mounted. Without this, the very first
+         * shell in a freshly-created VM gets ENOENT on posix_openpt. */
+        if (sa.chroot_path && sa.chroot_path[0] && sa.chroot_path[0] == '/') {
+            ensure_vm_devices(sa.chroot_path);
+        }
         pty_master = posix_openpt(O_RDWR | O_NOCTTY);
-        if (pty_master < 0 || grantpt(pty_master) < 0 || unlockpt(pty_master) < 0) {
-            emit_error(sid, errno, "openpt failed");
-            if (pty_master >= 0) close(pty_master);
+        if (pty_master < 0) {
+            slogf("ishsv: posix_openpt failed: %s (errno=%d). "
+                  "Is /dev/ptmx present and devpts mounted?\n",
+                  strerror(errno), errno);
+            emit_error(sid, errno, "posix_openpt failed");
+            free_spawn_args(&sa);
+            free_session(s);
+            return -1;
+        }
+        if (grantpt(pty_master) < 0) {
+            slogf("ishsv: grantpt failed: %s\n", strerror(errno));
+            emit_error(sid, errno, "grantpt failed");
+            close(pty_master);
+            free_spawn_args(&sa);
+            free_session(s);
+            return -1;
+        }
+        if (unlockpt(pty_master) < 0) {
+            slogf("ishsv: unlockpt failed: %s\n", strerror(errno));
+            emit_error(sid, errno, "unlockpt failed");
+            close(pty_master);
             free_spawn_args(&sa);
             free_session(s);
             return -1;
         }
         const char *slave_name = ptsname(pty_master);
         if (!slave_name) {
+            slogf("ishsv: ptsname failed: %s\n", strerror(errno));
             emit_error(sid, errno, "ptsname failed");
             close(pty_master);
             free_spawn_args(&sa);
@@ -345,6 +471,8 @@ static int do_spawn(uint32_t sid, uint8_t flags, const uint8_t *p, uint32_t plen
         }
         pty_slave = open(slave_name, O_RDWR | O_NOCTTY);
         if (pty_slave < 0) {
+            slogf("ishsv: open(%s) failed: %s. Is devpts mounted at /dev/pts?\n",
+                  slave_name, strerror(errno));
             emit_error(sid, errno, "pty slave open failed");
             close(pty_master);
             free_spawn_args(&sa);

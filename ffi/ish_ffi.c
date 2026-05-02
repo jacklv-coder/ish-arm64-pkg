@@ -166,18 +166,71 @@ int ish_ffi_chdir(const char *guest_path) {
  *  install device nodes                                              *
  * ------------------------------------------------------------------ */
 
-int ish_ffi_create_devices(void) {
-    /* All idempotent. We only care about the bare minimum the supervisor
-     * + busybox userland will reach for. */
-    generic_mknodat(AT_PWD, "/dev/null",    S_IFCHR|0666, dev_make(MEM_MAJOR, DEV_NULL_MINOR));
-    generic_mknodat(AT_PWD, "/dev/zero",    S_IFCHR|0666, dev_make(MEM_MAJOR, DEV_ZERO_MINOR));
-    generic_mknodat(AT_PWD, "/dev/full",    S_IFCHR|0666, dev_make(MEM_MAJOR, DEV_FULL_MINOR));
-    generic_mknodat(AT_PWD, "/dev/random",  S_IFCHR|0666, dev_make(MEM_MAJOR, DEV_RANDOM_MINOR));
-    generic_mknodat(AT_PWD, "/dev/urandom", S_IFCHR|0666, dev_make(MEM_MAJOR, DEV_URANDOM_MINOR));
-    generic_mknodat(AT_PWD, "/dev/tty",     S_IFCHR|0666, dev_make(TTY_ALTERNATE_MAJOR, DEV_TTY_MINOR));
-    generic_mknodat(AT_PWD, "/dev/console", S_IFCHR|0666, dev_make(TTY_ALTERNATE_MAJOR, DEV_CONSOLE_MINOR));
-    generic_mknodat(AT_PWD, "/dev/ptmx",    S_IFCHR|0666, dev_make(TTY_ALTERNATE_MAJOR, DEV_PTMX_MINOR));
+extern const struct fs_ops devptsfs;
+extern int do_mount(const struct fs_ops *fs, const char *source,
+                    const char *point, const char *info, int flags);
+
+/* Idempotently create the standard device nodes under <root>/dev/ and
+ * mount devpts at <root>/dev/pts. Called both for the real fs root
+ * (during boot) and for every per-VM directory that will host chrooted
+ * processes.
+ *
+ * Path argument is a guest-visible mount-absolute prefix (e.g. "" for
+ * the real root, or "/srv/vms/playground" for VM 'playground'). The
+ * trailing slash must be absent.
+ */
+static int create_devices_under(const char *prefix) {
+    char path[MAX_PATH];
+
+    #define MK(suffix, mode, dev) do {                            \
+        snprintf(path, sizeof(path), "%s" suffix, prefix);        \
+        generic_mknodat(AT_PWD, path, (mode), (dev));             \
+    } while (0)
+
+    /* /dev itself. mknodat won't make a directory; use generic_mkdirat
+     * on the actual prefix. The prefix's parents must already exist
+     * (they come from the bundled fakefs). */
+    {
+        char dev_dir[MAX_PATH];
+        snprintf(dev_dir, sizeof(dev_dir), "%s/dev", prefix);
+        generic_mkdirat(AT_PWD, dev_dir, 0755);
+        char pts_dir[MAX_PATH];
+        snprintf(pts_dir, sizeof(pts_dir), "%s/dev/pts", prefix);
+        generic_mkdirat(AT_PWD, pts_dir, 0755);
+    }
+
+    MK("/dev/null",    S_IFCHR|0666, dev_make(MEM_MAJOR, DEV_NULL_MINOR));
+    MK("/dev/zero",    S_IFCHR|0666, dev_make(MEM_MAJOR, DEV_ZERO_MINOR));
+    MK("/dev/full",    S_IFCHR|0666, dev_make(MEM_MAJOR, DEV_FULL_MINOR));
+    MK("/dev/random",  S_IFCHR|0666, dev_make(MEM_MAJOR, DEV_RANDOM_MINOR));
+    MK("/dev/urandom", S_IFCHR|0666, dev_make(MEM_MAJOR, DEV_URANDOM_MINOR));
+    MK("/dev/tty",     S_IFCHR|0666, dev_make(TTY_ALTERNATE_MAJOR, DEV_TTY_MINOR));
+    MK("/dev/console", S_IFCHR|0666, dev_make(TTY_ALTERNATE_MAJOR, DEV_CONSOLE_MINOR));
+    MK("/dev/ptmx",    S_IFCHR|0666, dev_make(TTY_ALTERNATE_MAJOR, DEV_PTMX_MINOR));
+
+    #undef MK
+
+    /* Mount the kernel's devpts so /dev/pts/N nodes exist on demand
+     * when posix_openpt allocates them. iSH's devptsfs is a synthetic
+     * filesystem (no on-disk state), so this is cheap and safe to
+     * call multiple times: mount_remove() / re-mount the same path
+     * are idempotent inside iSH's mount table. */
+    {
+        char pts_dir[MAX_PATH];
+        snprintf(pts_dir, sizeof(pts_dir), "%s/dev/pts", prefix);
+        do_mount(&devptsfs, "devpts", pts_dir, "", 0);
+    }
     return 0;
+}
+
+int ish_ffi_create_devices(void) {
+    return create_devices_under("");
+}
+
+int ish_ffi_setup_vm_root(const char *vm_root) {
+    if (!vm_root || !vm_root[0]) return -EINVAL;
+    /* vm_root is something like "/srv/vms/playground" — guest absolute. */
+    return create_devices_under(vm_root);
 }
 
 /* ------------------------------------------------------------------ *

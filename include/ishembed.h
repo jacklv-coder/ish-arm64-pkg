@@ -147,6 +147,12 @@ void ish_embed_session_close(ish_embed_session_t *s);
  * one in this process. */
 int ish_embed_shutdown(ish_embed_instance_t *inst, uint32_t grace_ms);
 
+/* Initialise device nodes + devpts mount inside a VM subtree so that
+ * processes chrooted into <vm_root> can allocate ptys. Call once per
+ * newly-created VM, after the VM's directory tree has been populated.
+ * vm_root is a guest-absolute path like "/srv/vms/playground". */
+int ish_embed_setup_vm_root(ish_embed_instance_t *inst, const char *vm_root);
+
 const char *ish_embed_strerror(int status);
 
 #ifdef __cplusplus

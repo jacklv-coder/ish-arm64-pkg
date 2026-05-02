@@ -52,8 +52,14 @@ int ish_ffi_install_executable(const char *guest_path,
                                const uint8_t *bytes, size_t len,
                                uint32_t mode);
 
-/* Create essential device nodes (/dev/null, tty, ptmx, etc.). Idempotent. */
+/* Create essential device nodes (/dev/null, tty, ptmx, etc.) under the
+ * real fs root, and mount devpts at /dev/pts. Idempotent. */
 int ish_ffi_create_devices(void);
+
+/* Same, but for a chrooted VM subtree. vm_root is a guest-absolute
+ * path (e.g. "/srv/vms/playground"). Creates dev nodes under
+ * <vm_root>/dev/ and mounts devpts at <vm_root>/dev/pts. */
+int ish_ffi_setup_vm_root(const char *vm_root);
 
 /* execve the supervisor as PID1. argv_packed and envp_packed are
  * NUL-separated, NUL-terminated buffers (i.e. "arg0\0arg1\0\0").
