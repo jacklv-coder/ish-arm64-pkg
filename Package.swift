@@ -48,7 +48,7 @@ let package = Package(
         .binaryTarget(
             name: "IshKernel",
             url: "https://github.com/Lolendor/ish-arm64-pkg/releases/download/v0.1.0/libIshKernel.xcframework.zip",
-            checksum: "REPLACE_ME_AT_RELEASE_TIME"
+            checksum: "8254afdc48d6ee88ff6550f55716a28cfa4eb6d44764f88eabd1c3a16152ef40"
         ),
         // High-level Swift API.
         .target(
