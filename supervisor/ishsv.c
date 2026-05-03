@@ -334,6 +334,19 @@ static void ensure_node(const char *path, mode_t mode, dev_t dev) {
     }
 }
 
+static void ensure_file_contents(const char *path, mode_t mode, const char *contents) {
+    int fd = open(path, O_WRONLY | O_CREAT | O_EXCL, mode);
+    if (fd < 0) {
+        if (errno != EEXIST)
+            slogf("ishsv: create %s failed: %s\n", path, strerror(errno));
+        return;
+    }
+    size_t len = strlen(contents);
+    if (write(fd, contents, len) != (ssize_t)len)
+        slogf("ishsv: write %s failed: %s\n", path, strerror(errno));
+    close(fd);
+}
+
 /* Ensure /dev nodes + devpts mount inside a chroot directory tree.
  * Idempotent. Called immediately before spawning a TTY child whose
  * chroot_path is something we haven't seen before. */
@@ -393,7 +406,15 @@ static void ensure_vm_devices(const char *chroot_path) {
     mkdir_p(p, 0700);
     snprintf(p, sizeof(p), "%s/root/.codex", chroot_path);
     mkdir_p(p, 0700);
+    snprintf(p, sizeof(p), "%s/root/.codex/config.toml", chroot_path);
+    ensure_file_contents(p, 0600,
+        "[tui]\n"
+        "alternate_screen = \"never\"\n"
+        "animations = false\n"
+        "show_tooltips = false\n");
     snprintf(p, sizeof(p), "%s/root/.codex/tmp", chroot_path);
+    mkdir_p(p, 0700);
+    snprintf(p, sizeof(p), "%s/root/.codex/tmp/arg0", chroot_path);
     mkdir_p(p, 0700);
 
     mark_ensured(chroot_path);
