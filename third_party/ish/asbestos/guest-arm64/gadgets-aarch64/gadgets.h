@@ -141,9 +141,7 @@ _addr   .req x7    // Changed from x3/x4 to x7 to avoid conflict with guest low 
 
     ldr x10, [x9, #TLB_ENTRY_data_minus_addr]
 
-    // NOTE: segfault_addr is NOT stored here for performance.
-    // On JIT crash (stale TLB SIGSEGV), crash_handler reconstructs
-    // guest_addr = (x7 - x10) & 0xffffffffffff from ucontext registers.
+    str x7, [_cpu, #CPU_segfault_addr]
     add x7, x10, x7                // host_addr = data_minus_addr + guest_addr
 back_\id:
 .endm

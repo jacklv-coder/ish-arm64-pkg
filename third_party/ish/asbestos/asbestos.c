@@ -62,7 +62,8 @@ static void jit_crash_handler(int sig, siginfo_t *info, void *ctx) {
         uint64_t cpu_ptr = uc->uc_mcontext->__ss.__x[1];
         uint64_t x7 = uc->uc_mcontext->__ss.__x[7];
         uint64_t x10 = uc->uc_mcontext->__ss.__x[10];
-        uint64_t guest_addr = (x7 - x10) & 0xffffffffffffULL;
+        uint64_t saved_fault = *(uint64_t *)(cpu_ptr + offsetof(struct cpu_state, segfault_addr));
+        uint64_t guest_addr = saved_fault != 0 ? saved_fault : ((x7 - x10) & 0xffffffffffffULL);
 
         extern __thread volatile uint64_t jit_last_host_fault;
         extern __thread volatile uint64_t jit_last_x7;
