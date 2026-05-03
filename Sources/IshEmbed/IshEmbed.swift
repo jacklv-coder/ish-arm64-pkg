@@ -342,6 +342,13 @@ public final class IshSession: @unchecked Sendable {
         if rc != ishOK { throw IshError.from(rc) }
     }
 
+    /// Send a real signal to the session process group even for TTY sessions.
+    public func signalDirect(_ signum: Int32) throws {
+        let r = try currentRaw()
+        let rc = ish_embed_session_signal(r, signum)
+        if rc != ishOK { throw IshError.from(rc) }
+    }
+
     /// Convenience: SIGINT (Ctrl+C). In TTY mode this is a control byte
     /// to the pty master, otherwise a direct kill(-pgid, SIGINT).
     public func interrupt() throws { try signal(2) }
