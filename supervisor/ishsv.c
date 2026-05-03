@@ -386,6 +386,16 @@ static void ensure_vm_devices(const char *chroot_path) {
         slogf("ishsv: mount procfs at %s failed: %s\n", p, strerror(errno));
     }
 
+    /* Codex refuses CODEX_HOME if the directory does not already exist,
+     * and uses CODEX_HOME/tmp for its arg0 helper symlink dirs. Create
+     * them once per VM root before the first shell starts. */
+    snprintf(p, sizeof(p), "%s/root", chroot_path);
+    mkdir_p(p, 0700);
+    snprintf(p, sizeof(p), "%s/root/.codex", chroot_path);
+    mkdir_p(p, 0700);
+    snprintf(p, sizeof(p), "%s/root/.codex/tmp", chroot_path);
+    mkdir_p(p, 0700);
+
     mark_ensured(chroot_path);
 }
 
