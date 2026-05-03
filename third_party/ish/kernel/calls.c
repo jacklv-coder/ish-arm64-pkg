@@ -47,6 +47,53 @@ __thread volatile uint64_t jit_last_x7 = 0;
 __thread volatile uint64_t jit_last_x10 = 0;
 __thread volatile int jit_crash_count = 0;
 
+#ifdef GUEST_ARM64
+static bool arm64_fault_to_zero_ok(struct cpu_state *cpu) {
+    if (cpu->segfault_was_write || cpu->segfault_addr >= 0x1000)
+        return false;
+    uint32_t insn = 0;
+    for (int j = 0; j < 4; j++) {
+        uint8_t b;
+        if (user_get(cpu->pc + j, b))
+            return false;
+        insn |= (uint32_t)b << (j * 8);
+    }
+    uint32_t rt = insn & 0x1f;
+    if (rt == 31)
+        return false;
+
+    // LDR unsigned immediate: e.g. ldr x8, [x19, #8]
+    if ((insn & 0x3b400000) == 0x39400000) {
+        cpu->regs[rt] = 0;
+        cpu->pc += 4;
+        return true;
+    }
+    // LDR/LDRB/LDRH/LDRSW unscaled/register/pre/post forms.
+    if ((insn & 0x3b200c00) == 0x38000000 ||
+        (insn & 0x3b200c00) == 0x38200800 ||
+        (insn & 0x3b200c00) == 0x38000400 ||
+        (insn & 0x3b200c00) == 0x38000c00) {
+        uint32_t opc = (insn >> 22) & 3;
+        if (opc == 0)
+            return false;
+        cpu->regs[rt] = 0;
+        cpu->pc += 4;
+        return true;
+    }
+    // LDP. Zero both destination registers and continue.
+    if ((insn & 0x7fc00000) == 0xa9400000 ||
+        (insn & 0x7fc00000) == 0x29400000) {
+        uint32_t rt2 = (insn >> 10) & 0x1f;
+        cpu->regs[rt] = 0;
+        if (rt2 < 31)
+            cpu->regs[rt2] = 0;
+        cpu->pc += 4;
+        return true;
+    }
+    return false;
+}
+#endif
+
 void handle_interrupt(int interrupt) {
     struct cpu_state *cpu = &current->cpu;
     if (interrupt == INT_SYSCALL) {
@@ -213,6 +260,9 @@ void handle_interrupt(int interrupt) {
 #endif
         if (ptr == NULL) {
 #ifdef GUEST_ARM64
+            if (arm64_fault_to_zero_ok(cpu))
+                goto gpf_handled;
+
             // V8 Zone memory reuse workaround: V8's Zone bump allocator reuses
             // memory without zeroing. A DeclarationScope can be allocated over
             // stale Variable data, inheriting -1 sentinel values in uninitialized
