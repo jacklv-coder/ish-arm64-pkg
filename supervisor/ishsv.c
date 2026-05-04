@@ -588,12 +588,14 @@ static int do_spawn(uint32_t sid, uint8_t flags, const uint8_t *p, uint32_t plen
             /* Become session leader and acquire the slave as the
              * controlling tty. */
             setsid();
+            setpgid(0, 0);
             dup2(pty_slave, 0);
             dup2(pty_slave, 1);
             dup2(pty_slave, 2);
 #ifdef TIOCSCTTY
             ioctl(pty_slave, TIOCSCTTY, 0);
 #endif
+            tcsetpgrp(pty_slave, getpid());
             close(pty_master);
             if (pty_slave > 2) close(pty_slave);
             for (int fd = 3; fd < 256; fd++) close(fd);
@@ -829,6 +831,21 @@ static void drain_session_streams_and_handle_exit(void) {
     }
 }
 
+static pid_t session_signal_pgid(struct session *s) {
+    if (s->is_tty && s->stdin_fd >= 0) {
+        pid_t fg = tcgetpgrp(s->stdin_fd);
+        if (fg > 0)
+            return fg;
+    }
+    return s->pid;
+}
+
+static void signal_session(struct session *s, int signum) {
+    pid_t pgid = session_signal_pgid(s);
+    if (pgid > 0)
+        kill(-pgid, signum);
+}
+
 static void apply_term_grace(void) {
     /* Each main-loop tick (~50ms), if a session was TERMINATEd, after
      * ~30 ticks (~1.5s) escalate to SIGKILL. */
@@ -837,9 +854,8 @@ static void apply_term_grace(void) {
         if (!s->in_use) continue;
         if (s->term_grace_ticks > 0) {
             s->term_grace_ticks--;
-            if (s->term_grace_ticks == 0 && !s->reaped) {
-                kill(-s->pid, SIGKILL);
-            }
+            if (s->term_grace_ticks == 0 && !s->reaped)
+                signal_session(s, SIGKILL);
         }
     }
 }
@@ -848,7 +864,7 @@ static void shutdown_all(void) {
     for (size_t i = 0; i < SUPERVISOR_MAX_SESSIONS; i++) {
         struct session *s = &g_sessions[i];
         if (!s->in_use) continue;
-        kill(-s->pid, SIGTERM);
+        signal_session(s, SIGTERM);
     }
     /* drain for ~2s */
     for (int t = 0; t < 40; t++) {
@@ -863,7 +879,7 @@ static void shutdown_all(void) {
     for (size_t i = 0; i < SUPERVISOR_MAX_SESSIONS; i++) {
         struct session *s = &g_sessions[i];
         if (!s->in_use) continue;
-        kill(-s->pid, SIGKILL);
+        signal_session(s, SIGKILL);
     }
     for (int t = 0; t < 40; t++) {
         reap_children();
@@ -1000,14 +1016,14 @@ int main(void) {
                     if (plen >= 4) {
                         int signum = ish_proto_get_i32(body);
                         struct session *s = find_session(sid);
-                        if (s && s->pid > 0) kill(-s->pid, signum);
+                        if (s && s->pid > 0) signal_session(s, signum);
                     }
                     break;
                 }
                 case ISH_FT_TERMINATE: {
                     struct session *s = find_session(sid);
                     if (s && s->pid > 0) {
-                        kill(-s->pid, SIGTERM);
+                        signal_session(s, SIGTERM);
                         s->term_grace_ticks = 30; /* ~1.5s @ 50ms tick */
                     }
                     break;
