@@ -27,6 +27,7 @@
 // to cpu_state via the _cpu pointer (x1) from ucontext.
 __thread volatile sig_atomic_t in_jit;
 __thread volatile addr_t jit_saved_pc;  // block start PC, read by signal handler
+static __thread struct fiber_frame *jit_current_frame;
 // Marker set to 1 on iSH execution threads so the signal handler can distinguish
 // iSH threads from app threads (Swift async, networking, UI).
 __thread int ish_thread_marker;
@@ -59,7 +60,7 @@ static void forward_signal_to_previous(int sig, siginfo_t *info, void *ctx) {
 static void jit_crash_handler(int sig, siginfo_t *info, void *ctx) {
     if ((sig == SIGSEGV || sig == SIGBUS) && in_jit) {
         ucontext_t *uc = (ucontext_t *)ctx;
-        uint64_t cpu_ptr = uc->uc_mcontext->__ss.__x[1];
+        uint64_t cpu_ptr = (uint64_t)&jit_current_frame->cpu;
         uint64_t x7 = uc->uc_mcontext->__ss.__x[7];
         uint64_t x10 = uc->uc_mcontext->__ss.__x[10];
         uint64_t saved_fault = *(uint64_t *)(cpu_ptr + offsetof(struct cpu_state, segfault_addr));
@@ -80,7 +81,7 @@ static void jit_crash_handler(int sig, siginfo_t *info, void *ctx) {
         *(int *)(cpu_ptr + offsetof(struct cpu_state, segfault_was_write)) = was_write;
         *(uint64_t *)(cpu_ptr + offsetof(struct cpu_state, pc)) = (uint64_t) jit_saved_pc;
 
-        uint64_t exit_sp = *(uint64_t *)(cpu_ptr + offsetof(struct fiber_frame, jit_exit_sp));
+        uint64_t exit_sp = jit_current_frame->jit_exit_sp;
         uc->uc_mcontext->__ss.__sp = exit_sp;
         uc->uc_mcontext->__ss.__pc = (uint64_t) jit_crash_trampoline;
 
@@ -423,10 +424,12 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
         // Save block start PC to thread-local for crash recovery.
         // The signal handler reads this to restore cpu->pc on SIGSEGV.
         jit_saved_pc = frame->cpu.pc;
+        jit_current_frame = frame;
 
         in_jit = 1;
         interrupt = fiber_enter(block, frame, tlb);
         in_jit = 0;
+        jit_current_frame = NULL;
 
         // Check if fiber_enter returned due to a JIT crash (signal handler
         // redirected PC to jit_crash_trampoline which returns INT_JIT_CRASH).
