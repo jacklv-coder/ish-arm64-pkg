@@ -19,6 +19,7 @@
 #include <unistd.h>
 
 #include "ishembed.h"
+#include "proto.h"  /* ISH_STREAM_* */
 
 static const char *rootfs_path(void) {
     const char *p = getenv("ISH_EMBED_ROOTFS");

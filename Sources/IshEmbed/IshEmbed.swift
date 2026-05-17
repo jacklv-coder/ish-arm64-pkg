@@ -41,6 +41,12 @@ public struct IshSpawnOptions {
     /// Used for VM-style isolation; pass `/srv/vms/<name>` to confine
     /// the new process to that VM's filesystem.
     public var chrootPath: String?
+    /// Initial pty window size. Only honored when `allocateTTY` is
+    /// true; pipe spawns ignore. nil = use the supervisor's default
+    /// (24×80). Pixel dimensions are informational and may be left at
+    /// 0 if the host doesn't know them.
+    public var initialWindowSize: (rows: UInt16, cols: UInt16,
+                                   xpixel: UInt16, ypixel: UInt16)?
 
     public init(argv: [String],
                 cwd: String? = nil,
@@ -48,7 +54,9 @@ public struct IshSpawnOptions {
                 allocateTTY: Bool = false,
                 mergeStderrIntoStdout: Bool = false,
                 timeout: TimeInterval? = nil,
-                chrootPath: String? = nil) {
+                chrootPath: String? = nil,
+                initialWindowSize: (rows: UInt16, cols: UInt16,
+                                    xpixel: UInt16, ypixel: UInt16)? = nil) {
         self.argv = argv
         self.cwd  = cwd
         self.env  = env
@@ -56,6 +64,7 @@ public struct IshSpawnOptions {
         self.mergeStderrIntoStdout = mergeStderrIntoStdout
         self.timeout = timeout
         self.chrootPath = chrootPath
+        self.initialWindowSize = initialWindowSize
     }
 }
 
@@ -245,6 +254,15 @@ public final class IshInstance: @unchecked Sendable {
                 cOpts.timeout_ms = opts.timeout.map { UInt32(min(max(0, $0 * 1000), Double(UInt32.max - 1))) } ?? 0
                 cOpts.chroot_path = chrootC.map { UnsafePointer($0) }
                 cOpts.reserved_flags = 0
+                if let ws = opts.initialWindowSize {
+                    cOpts.init_rows   = ws.rows
+                    cOpts.init_cols   = ws.cols
+                    cOpts.init_xpixel = ws.xpixel
+                    cOpts.init_ypixel = ws.ypixel
+                } else {
+                    cOpts.init_rows = 0; cOpts.init_cols = 0
+                    cOpts.init_xpixel = 0; cOpts.init_ypixel = 0
+                }
                 return try body(&cOpts)
             }
         }
@@ -346,6 +364,16 @@ public final class IshSession: @unchecked Sendable {
     public func signalDirect(_ signum: Int32) throws {
         let r = try currentRaw()
         let rc = ish_embed_session_signal(r, signum)
+        if rc != ishOK { throw IshError.from(rc) }
+    }
+
+    /// Resize the session's pty and deliver SIGWINCH to the foreground
+    /// process group. Silently no-op for non-TTY sessions. `xpixel` /
+    /// `ypixel` are informational; pass 0 if unknown.
+    public func resize(rows: UInt16, cols: UInt16,
+                       xpixel: UInt16 = 0, ypixel: UInt16 = 0) throws {
+        let r = try currentRaw()
+        let rc = ish_embed_session_resize(r, rows, cols, xpixel, ypixel)
         if rc != ishOK { throw IshError.from(rc) }
     }
 

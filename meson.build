@@ -88,12 +88,31 @@ if ish_build_dir != ''
         required: false)
     sqlite3 = cc.find_library('sqlite3', required: false)
     if libish_a.found() and libish_emu_a.found() and libfakefs_a.found() and sqlite3.found()
+        ish_test_deps = [
+            ishembed_dep,
+            libish_a, libish_emu_a, libfakefs_a, sqlite3, threads,
+        ]
         executable('ishembed_smoke',
             ['c-tests/smoke.c'],
-            dependencies: [
-                ishembed_dep,
-                libish_a, libish_emu_a, libfakefs_a, sqlite3, threads,
-            ],
+            dependencies: ish_test_deps,
+            include_directories: [embed_includes],
+            install: false,
+        )
+        executable('procfs_test',
+            ['c-tests/procfs_test.c'],
+            dependencies: ish_test_deps,
+            include_directories: [embed_includes],
+            install: false,
+        )
+        executable('codex_test',
+            ['c-tests/codex_test.c'],
+            dependencies: ish_test_deps,
+            include_directories: [embed_includes],
+            install: false,
+        )
+        executable('provision_codex',
+            ['c-tests/provision_codex.c'],
+            dependencies: ish_test_deps,
             include_directories: [embed_includes],
             install: false,
         )

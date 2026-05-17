@@ -194,10 +194,15 @@ static void free_session(struct session *s) {
 
 /* Parse SPAWN payload (returns malloc'd argv/envp arrays + cwd). */
 struct spawn_args {
-    char  *cwd;
-    char **argv;
-    char **envp;
-    char  *chroot_path;   /* NULL = no chroot */
+    char     *cwd;
+    char    **argv;
+    char    **envp;
+    char     *chroot_path;     /* NULL = no chroot */
+    /* Optional initial pty winsize (v3 SPAWN tail). 0/0 = use default. */
+    uint16_t  init_rows;
+    uint16_t  init_cols;
+    uint16_t  init_xpix;
+    uint16_t  init_ypix;
 };
 
 static void free_spawn_args(struct spawn_args *a) {
@@ -265,7 +270,19 @@ static int parse_spawn_payload(const uint8_t *p, uint32_t plen,
         }
         off += chL;
     }
-    if (off != plen) return -1;
+    /* Optional initial winsize (v3). 8 bytes of u16le. Older payloads
+     * simply don't include them; newer payloads always do. */
+    if (off + 8 <= plen) {
+        out->init_rows = ish_proto_get_u16(p + off + 0);
+        out->init_cols = ish_proto_get_u16(p + off + 2);
+        out->init_xpix = ish_proto_get_u16(p + off + 4);
+        out->init_ypix = ish_proto_get_u16(p + off + 6);
+        off += 8;
+    }
+    /* Be lenient about any remaining tail bytes: that's how future
+     * proto versions extend SPAWN. We've parsed everything we know;
+     * silently ignore the rest. */
+    (void)off;
     return 0;
 }
 
@@ -301,8 +318,20 @@ static void mark_ensured(const char *root) {
     ensured_vm_count++;
 }
 
+/* Returns 1 if `path` already exists as any kind of filesystem object. */
+static int path_exists(const char *path) {
+    struct stat st;
+    return stat(path, &st) == 0;
+}
+
 static int mkdir_p(const char *path, mode_t mode) {
-    if (mkdir(path, mode) == 0 || errno == EEXIST) return 0;
+    if (mkdir(path, mode) == 0) return 0;
+    if (errno == EEXIST) return 0;
+    /* In iSH, calling mkdir() on a directory that already exists and
+     * has a synthetic filesystem (devpts, procfs) mounted on top of
+     * it returns EPERM rather than EEXIST. Treat that as success too:
+     * the directory is, after all, there, just shadowed by a mount. */
+    if (errno == EPERM && path_exists(path)) return 0;
     /* try to create parents */
     char tmp[PATH_MAX];
     snprintf(tmp, sizeof(tmp), "%s", path);
@@ -310,6 +339,10 @@ static int mkdir_p(const char *path, mode_t mode) {
         if (*p == '/') {
             *p = 0;
             if (mkdir(tmp, mode) < 0 && errno != EEXIST) {
+                if (errno == EPERM && path_exists(tmp)) {
+                    *p = '/';
+                    continue;
+                }
                 slogf("ishsv: mkdir(%s) failed: %s\n", tmp, strerror(errno));
                 return -1;
             }
@@ -317,6 +350,7 @@ static int mkdir_p(const char *path, mode_t mode) {
         }
     }
     if (mkdir(tmp, mode) < 0 && errno != EEXIST) {
+        if (errno == EPERM && path_exists(tmp)) return 0;
         slogf("ishsv: mkdir(%s) failed: %s\n", tmp, strerror(errno));
         return -1;
     }
@@ -470,13 +504,18 @@ static int do_spawn(uint32_t sid, uint8_t flags, const uint8_t *p, uint32_t plen
     int err_pipe[2] = {-1, -1};
     int pty_master = -1, pty_slave = -1;
 
+    /* If we're spawning into a chrooted VM, make sure that VM has
+     * /proc, /dev/ptmx and /dev/pts mounted, regardless of whether
+     * the caller wants a TTY. Non-interactive commands (codex --version,
+     * npm install, busybox sh -c '…') also read /proc/self/exe and
+     * /proc/self/status. Doing this only in the want_tty branch was
+     * a bug: oneshot commands ended up running against an empty /proc.
+     * Idempotent (already_ensured() caches by chroot_path). */
+    if (sa.chroot_path && sa.chroot_path[0] && sa.chroot_path[0] == '/') {
+        ensure_vm_devices(sa.chroot_path);
+    }
+
     if (want_tty) {
-        /* If we're spawning into a chrooted VM, make sure that VM has
-         * /dev/ptmx and /dev/pts mounted. Without this, the very first
-         * shell in a freshly-created VM gets ENOENT on posix_openpt. */
-        if (sa.chroot_path && sa.chroot_path[0] && sa.chroot_path[0] == '/') {
-            ensure_vm_devices(sa.chroot_path);
-        }
         pty_master = posix_openpt(O_RDWR | O_NOCTTY);
         if (pty_master < 0) {
             slogf("ishsv: posix_openpt failed: %s (errno=%d). "
@@ -582,7 +621,12 @@ static int do_spawn(uint32_t sid, uint8_t flags, const uint8_t *p, uint32_t plen
                 cfsetospeed(&tio, B38400);
                 tcsetattr(pty_slave, TCSANOW, &tio);
             }
-            struct winsize ws = { .ws_row = 24, .ws_col = 80 };
+            struct winsize ws = {
+                .ws_row    = sa.init_rows ? sa.init_rows : 24,
+                .ws_col    = sa.init_cols ? sa.init_cols : 80,
+                .ws_xpixel = sa.init_xpix,
+                .ws_ypixel = sa.init_ypix,
+            };
             ioctl(pty_slave, TIOCSWINSZ, &ws);
 
             /* Become session leader and acquire the slave as the
@@ -1025,6 +1069,32 @@ int main(void) {
                     if (s && s->pid > 0) {
                         signal_session(s, SIGTERM);
                         s->term_grace_ticks = 30; /* ~1.5s @ 50ms tick */
+                    }
+                    break;
+                }
+                case ISH_FT_RESIZE: {
+                    /* Payload: u16 rows, u16 cols, u16 xpix, u16 ypix
+                     * (all little-endian). Only meaningful for TTY
+                     * sessions; pipe sessions silently ignore. The
+                     * kernel tty layer emits SIGWINCH to the
+                     * foreground process group automatically. */
+                    if (plen < 8) break;
+                    uint16_t rows = ish_proto_get_u16(body + 0);
+                    uint16_t cols = ish_proto_get_u16(body + 2);
+                    uint16_t xpix = ish_proto_get_u16(body + 4);
+                    uint16_t ypix = ish_proto_get_u16(body + 6);
+                    struct session *s = find_session(sid);
+                    if (s && s->is_tty && s->stdin_fd >= 0 && rows && cols) {
+                        struct winsize ws = {
+                            .ws_row    = rows,
+                            .ws_col    = cols,
+                            .ws_xpixel = xpix,
+                            .ws_ypixel = ypix,
+                        };
+                        if (ioctl(s->stdin_fd, TIOCSWINSZ, &ws) < 0) {
+                            slogf("ishsv: TIOCSWINSZ sid=%u %ux%u: %s\n",
+                                  sid, cols, rows, strerror(errno));
+                        }
                     }
                     break;
                 }

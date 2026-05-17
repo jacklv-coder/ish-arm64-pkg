@@ -37,7 +37,7 @@
 #include <stdint.h>
 
 #define ISH_PROTO_MAGIC      0xE5u
-#define ISH_PROTO_VERSION    2u
+#define ISH_PROTO_VERSION    3u
 #define ISH_PROTO_HDR_SIZE   12   /* magic+ver+type+flags + u32 len + u32 sid  */
 #define ISH_PROTO_MAX_PAYLOAD (1u * 1024u * 1024u)  /* 1 MiB hard cap */
 
@@ -50,6 +50,7 @@
 #define ISH_FT_TERMINATE     0x06
 #define ISH_FT_SHUTDOWN      0x07
 #define ISH_FT_PING          0x08
+#define ISH_FT_RESIZE        0x09  /* set pty winsize for a session (v3) */
 
 /* Supervisor -> Host */
 #define ISH_FT_HELLO_ACK     0x40
@@ -79,7 +80,17 @@
  *   for i in 0..argc:  u32 len; u8 bytes[len]
  *   u32 envc;
  *   for i in 0..envc:  u32 len; u8 bytes[len]   (each entry = "K=V")
- *   u32 chroot_len; u8 chroot[chroot_len]       (0 = no chroot; v2 only)
+ *   u32 chroot_len; u8 chroot[chroot_len]       (0 = no chroot; v2+)
+ *   u16 init_rows;  u16 init_cols;              (v3+ optional initial pty
+ *   u16 init_xpix;  u16 init_ypix;               winsize; all-zero means
+ *                                                "use supervisor default")
+ *
+ * Trailing fields are append-only: a v3 supervisor reading a v2-style
+ * payload (no winsize tail) sees payload_len short of the winsize
+ * bytes and just sticks with the default 24x80. A v2 supervisor
+ * reading a v3 host's payload ignores the trailing 8 bytes for the
+ * same reason. (The host negotiates via proto_version in HELLO_ACK
+ * and omits the v3 tail when talking to older supervisors.)
  *
  * The chroot field was added in proto v2; supervisors that report
  * proto_version=1 in HELLO_ACK ignore the trailing field gracefully if
@@ -103,6 +114,17 @@
  *
  * SIGNAL payload:
  *   i32 signum
+ *
+ * RESIZE payload (v3+):
+ *   u16 rows
+ *   u16 cols
+ *   u16 xpixel   (informational; 0 = unknown)
+ *   u16 ypixel   (informational; 0 = unknown)
+ *
+ *   On receipt the supervisor issues TIOCSWINSZ on the session's pty
+ *   master, which causes the kernel tty layer to deliver SIGWINCH to
+ *   the foreground process group. No reply frame is generated; the
+ *   host fires-and-forgets.
  *
  * HELLO payload:
  *   u32 abi_version
@@ -152,6 +174,12 @@ static inline int ish_proto_parse_hdr(const uint8_t hdr[ISH_PROTO_HDR_SIZE],
 }
 
 /* Little-endian payload helpers. */
+static inline void ish_proto_put_u16(uint8_t *p, uint16_t v) {
+    p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8);
+}
+static inline uint16_t ish_proto_get_u16(const uint8_t *p) {
+    return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
+}
 static inline void ish_proto_put_u32(uint8_t *p, uint32_t v) {
     p[0]=(uint8_t)v; p[1]=(uint8_t)(v>>8); p[2]=(uint8_t)(v>>16); p[3]=(uint8_t)(v>>24);
 }

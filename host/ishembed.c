@@ -549,11 +549,15 @@ fail:;
  *  spawn / sessions                                               *
  * --------------------------------------------------------------- */
 
-/* serialize argv/envp/chroot into SPAWN payload. argv must not be NULL. */
+/* serialize argv/envp/chroot/initial-winsize into a SPAWN payload.
+ * argv must not be NULL. The trailing winsize bytes are always
+ * emitted (proto v3); v2 supervisors silently ignore them. */
 static int build_spawn_payload(const char *cwd,
                                const char *const *argv,
                                const char *const *envp,
                                const char *chroot_path,
+                               uint16_t init_rows, uint16_t init_cols,
+                               uint16_t init_xpix, uint16_t init_ypix,
                                uint8_t **out_buf, uint32_t *out_len) {
     size_t cap = 64;
     size_t cwd_len = cwd ? strlen(cwd) : 0;
@@ -562,7 +566,7 @@ static int build_spawn_payload(const char *cwd,
     if (argv) for (; argv[argc]; argc++) ;
     size_t envc = 0;
     if (envp) for (; envp[envc]; envc++) ;
-    cap += cwd_len + chroot_len;
+    cap += cwd_len + chroot_len + 8 /* winsize tail */;
     for (size_t i = 0; i < argc; i++) cap += strlen(argv[i]) + 8;
     for (size_t i = 0; i < envc; i++) cap += strlen(envp[i]) + 8;
 
@@ -585,6 +589,11 @@ static int build_spawn_payload(const char *cwd,
     }
     ish_proto_put_u32(buf + off, (uint32_t)chroot_len); off += 4;
     if (chroot_len) { memcpy(buf + off, chroot_path, chroot_len); off += chroot_len; }
+    /* v3 tail: initial winsize. Zero means "use supervisor default". */
+    ish_proto_put_u16(buf + off, init_rows); off += 2;
+    ish_proto_put_u16(buf + off, init_cols); off += 2;
+    ish_proto_put_u16(buf + off, init_xpix); off += 2;
+    ish_proto_put_u16(buf + off, init_ypix); off += 2;
     *out_buf = buf;
     *out_len = (uint32_t)off;
     return ISH_OK;
@@ -617,7 +626,10 @@ int ish_embed_spawn(ish_embed_instance_t *inst,
     uint8_t *payload = NULL;
     uint32_t plen = 0;
     int rc = build_spawn_payload(opts->cwd, opts->argv, opts->envp,
-                                 opts->chroot_path, &payload, &plen);
+                                 opts->chroot_path,
+                                 opts->init_rows, opts->init_cols,
+                                 opts->init_xpixel, opts->init_ypixel,
+                                 &payload, &plen);
     if (rc != 0) {
         session_unlink(inst, s);
         session_destroy(s);
@@ -714,6 +726,18 @@ int ish_embed_session_signal(ish_embed_session_t *s, int signum) {
     uint8_t buf[4];
     ish_proto_put_i32(buf, signum);
     return send_frame(s->inst, ISH_FT_SIGNAL, 0, s->id, buf, sizeof(buf));
+}
+
+int ish_embed_session_resize(ish_embed_session_t *s,
+                              uint16_t rows, uint16_t cols,
+                              uint16_t xpixel, uint16_t ypixel) {
+    if (!s) return ISH_ERR_INVALID_ARG;
+    uint8_t buf[8];
+    ish_proto_put_u16(buf + 0, rows);
+    ish_proto_put_u16(buf + 2, cols);
+    ish_proto_put_u16(buf + 4, xpixel);
+    ish_proto_put_u16(buf + 6, ypixel);
+    return send_frame(s->inst, ISH_FT_RESIZE, 0, s->id, buf, sizeof(buf));
 }
 
 int ish_embed_session_terminate(ish_embed_session_t *s, uint32_t grace_ms) {

@@ -7,8 +7,17 @@ Package.resolved
 
 # Native build outputs
 build/
+build-host/
+build-check/
 *.o
 *.a
+
+# Provisioned test rootfs (built on demand by scripts/provision-codex-rootfs.sh)
+fs-codex/
+*.provision.log
+
+# Locally built guest test blobs (binary inputs for c-tests)
+c-tests/blobs/*.bin
 
 # macOS
 .DS_Store

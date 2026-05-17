@@ -86,6 +86,14 @@ typedef struct ish_embed_spawn_opts {
      * tree under e.g. /srv/vms/<name>/ in the shared fakefs. */
     const char *chroot_path;
     int reserved_flags;
+    /* Initial pty winsize. Only honored when allocate_tty != 0; pipe
+     * spawns ignore them. 0 = use supervisor default (24x80 for rows /
+     * cols, unknown for pixels). Added in proto v3 — older
+     * supervisors silently fall back to their default. */
+    uint16_t init_rows;
+    uint16_t init_cols;
+    uint16_t init_xpixel;
+    uint16_t init_ypixel;
 } ish_embed_spawn_opts_t;
 
 typedef struct ish_embed_oneshot_result {
@@ -131,6 +139,13 @@ int ish_embed_session_write(ish_embed_session_t *s,
 /* Send a Unix signal to the session's process group. signum is the standard
  * Linux signal number (SIGINT=2, SIGTERM=15, ...). */
 int ish_embed_session_signal(ish_embed_session_t *s, int signum);
+
+/* Resize the session's pty (if any) and deliver SIGWINCH to the
+ * foreground process group. Pipe sessions silently accept and ignore.
+ * `xpixel` / `ypixel` are informational; pass 0 if unknown. */
+int ish_embed_session_resize(ish_embed_session_t *s,
+                              uint16_t rows, uint16_t cols,
+                              uint16_t xpixel, uint16_t ypixel);
 
 /* SIGTERM, then SIGKILL after grace_ms. */
 int ish_embed_session_terminate(ish_embed_session_t *s, uint32_t grace_ms);
