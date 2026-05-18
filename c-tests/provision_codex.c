@@ -1,17 +1,28 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
  *
- * provision_codex — one-time host-driven install of nodejs+npm+codex into
- * a fakefs rootfs. Boots iSH against $ISH_EMBED_ROOTFS, runs:
+ * provision_codex — host-driven install of nodejs+npm+<global package>
+ * into a fakefs rootfs. Despite the name, this provisions arbitrary
+ * npm-global tools (codex, claude-code, ...) — controlled by env.
  *
- *     apk add --no-cache nodejs npm
- *     npm install -g --loglevel=error @openai/codex@$CODEX_VERSION
+ * Env knobs (all optional):
+ *   ISH_EMBED_ROOTFS  path to fakefs rootfs (required)
+ *   VM_NAME           dir name under /srv/vms (default: "codex")
+ *   NPM_PKG           package name (default: "@openai/codex").
+ *                     For back-compat CODEX_PKG is also honored.
+ *   NPM_VERSION       version spec (default: "" = latest).
+ *                     For back-compat CODEX_VERSION is also honored.
+ *   BIN_NAME          binary name to sanity-check after install
+ *                     (default: same as NPM_PKG basename, sans @scope/)
+ *
+ * The supervisor flow:
+ *   1. Clone /srv/vms/.template -> /srv/vms/$VM_NAME (idempotent).
+ *   2. setup_vm_root($VM_ROOT)  — mounts /proc /dev/pts inside chroot.
+ *   3. apk add --no-cache nodejs npm.
+ *   4. npm install -g $NPM_PKG[@$NPM_VERSION].
+ *   5. which $BIN_NAME — print resolved path for sanity.
  *
  * Streams guest stdout+stderr to stderr in real time so a slow npm
  * install is observable. Exits 0 if both commands return 0.
- *
- * The caller (scripts/provision-codex-rootfs.sh) is responsible for
- * making a copy of the clean rootfs before running this, since the
- * install mutates the fakefs.
  */
 
 #define _GNU_SOURCE
@@ -24,15 +35,16 @@
 #include "ishembed.h"
 #include "proto.h"  /* ISH_STREAM_* */
 
-/* All install work happens inside this VM, mirroring how iClaw isolates
- * each environment via chroot. The clean rootfs at /srv/vms/.template
- * is cloned into here on first run. */
-#define VM_NAME "codex"
-#define VM_ROOT "/srv/vms/" VM_NAME
-
 static const char *getenv_def(const char *k, const char *def) {
     const char *v = getenv(k);
     return (v && *v) ? v : def;
+}
+
+/* Derive a sensible default binary name from a package name. Strips
+ * a leading "@scope/" if present. */
+static const char *default_bin_name(const char *pkg) {
+    const char *slash = strrchr(pkg, '/');
+    return slash ? slash + 1 : pkg;
 }
 
 static int stream_session(ish_embed_session_t *s, const char *label,
@@ -127,14 +139,25 @@ int main(void) {
         fprintf(stderr, "ISH_EMBED_ROOTFS not set\n");
         return 2;
     }
-    const char *codex_pkg = getenv_def("CODEX_PKG", "@openai/codex");
-    /* CODEX_VERSION="" means latest. */
-    const char *codex_ver = getenv_def("CODEX_VERSION", "");
+    /* NPM_PKG / VM_NAME / BIN_NAME / NPM_VERSION are the modern names;
+     * CODEX_PKG / CODEX_VERSION are honored for back-compat. */
+    const char *vm_name  = getenv_def("VM_NAME",
+                              getenv_def("CODEX_VM_NAME", "codex"));
+    const char *pkg      = getenv_def("NPM_PKG",
+                              getenv_def("CODEX_PKG", "@openai/codex"));
+    const char *ver      = getenv_def("NPM_VERSION",
+                              getenv_def("CODEX_VERSION", ""));
+    const char *bin_name = getenv_def("BIN_NAME", default_bin_name(pkg));
+
+    char vm_root[256];
+    snprintf(vm_root, sizeof(vm_root), "/srv/vms/%s", vm_name);
+
     char npm_target[256];
-    if (codex_ver[0])
-        snprintf(npm_target, sizeof(npm_target), "%s@%s", codex_pkg, codex_ver);
-    else
-        snprintf(npm_target, sizeof(npm_target), "%s", codex_pkg);
+    if (ver[0]) snprintf(npm_target, sizeof(npm_target), "%s@%s", pkg, ver);
+    else        snprintf(npm_target, sizeof(npm_target), "%s", pkg);
+
+    fprintf(stderr, "[provision] VM=%s pkg=%s bin=%s\n",
+            vm_root, npm_target, bin_name);
 
     ish_embed_boot_opts_t bopts = {0};
     bopts.rootfs_path = root;
@@ -147,32 +170,34 @@ int main(void) {
         return 1;
     }
 
-    /* Step 0: clone the stock template into the codex VM tree if not
-     * already. We can do this in the root (no chroot) — busybox cp -a
-     * is happy to copy across the synthetic fakefs. */
+    /* Step 0: clone the stock template into the VM tree if not already.
+     * Done in the root (no chroot) — busybox cp -a copies across the
+     * synthetic fakefs. */
     fprintf(stderr, "[provision] cloning /srv/vms/.template -> %s "
-                    "(skip if already cloned)\n", VM_ROOT);
-    int clone_rc = run_streaming(inst, "clone-vm",
-        "if [ ! -e " VM_ROOT "/.cloned ]; then "
-        "  rm -rf " VM_ROOT " && "
-        "  mkdir -p " VM_ROOT " && "
-        "  cp -a /srv/vms/.template/. " VM_ROOT "/ && "
-        "  touch " VM_ROOT "/.cloned && "
+                    "(skip if already cloned)\n", vm_root);
+    char clone_cmd[1024];
+    snprintf(clone_cmd, sizeof(clone_cmd),
+        "if [ ! -e %s/.cloned ]; then "
+        "  rm -rf %s && "
+        "  mkdir -p %s && "
+        "  cp -a /srv/vms/.template/. %s/ && "
+        "  touch %s/.cloned && "
         "  echo cloned ; "
         "else "
         "  echo already-cloned ; "
         "fi",
-        300000, NULL);
+        vm_root, vm_root, vm_root, vm_root, vm_root);
+    int clone_rc = run_streaming(inst, "clone-vm", clone_cmd, 300000, NULL);
     if (clone_rc != 0) {
         fprintf(stderr, "\nprovision aborted: clone step failed\n");
         ish_embed_shutdown(inst, 2000);
         return 1;
     }
 
-    int rc2 = ish_embed_setup_vm_root(inst, VM_ROOT);
+    int rc2 = ish_embed_setup_vm_root(inst, vm_root);
     if (rc2 != 0) {
         fprintf(stderr, "setup_vm_root(%s) failed: %s\n",
-                VM_ROOT, ish_embed_strerror(rc2));
+                vm_root, ish_embed_strerror(rc2));
         ish_embed_shutdown(inst, 2000);
         return 1;
     }
@@ -182,12 +207,13 @@ int main(void) {
     /* Optional cache refresh; ignore failure (network may be sluggish). */
     run_streaming(inst, "apk-update",
                   "apk update 2>&1 | tail -20 || true",
-                  120000, VM_ROOT);
+                  120000, vm_root);
 
-    /* Step 1: nodejs + npm via apk. */
+    /* Step 1: nodejs + npm via apk. Idempotent: apk skips already-
+     * installed packages. */
     fails += (run_streaming(inst, "apk-add-node",
                             "apk add --no-cache nodejs npm 2>&1",
-                            600000, VM_ROOT) != 0);
+                            600000, vm_root) != 0);
 
     if (fails) {
         fprintf(stderr, "\nprovision aborted: apk step failed\n");
@@ -195,23 +221,24 @@ int main(void) {
         return 1;
     }
 
-    /* Step 2: codex. Use --no-fund --no-audit to keep output sane.
-     * --loglevel=info gives progress without firehose. */
-    char script[512];
+    /* Step 2: the package itself. */
+    char script[1024];
     snprintf(script, sizeof(script),
              "npm config set fund false; "
              "npm config set audit false; "
              "npm install -g --loglevel=info %s 2>&1",
              npm_target);
-    fails += (run_streaming(inst, "npm-install-codex", script, 1200000,
-                            VM_ROOT) != 0);
+    fails += (run_streaming(inst, "npm-install", script, 1200000,
+                            vm_root) != 0);
 
-    /* Sanity: where did codex land? */
-    run_streaming(inst, "which-codex",
-                  "which codex || true; ls -la $(which codex) 2>/dev/null || true",
-                  10000, VM_ROOT);
+    /* Sanity: where did the binary land? */
+    char which_cmd[256];
+    snprintf(which_cmd, sizeof(which_cmd),
+             "which %s || true; ls -la $(which %s) 2>/dev/null || true",
+             bin_name, bin_name);
+    run_streaming(inst, "which-bin", which_cmd, 10000, vm_root);
 
     ish_embed_shutdown(inst, 5000);
-    fprintf(stderr, "\nprovision_codex: %d failure(s)\n", fails);
+    fprintf(stderr, "\nprovision: %d failure(s)\n", fails);
     return fails ? 1 : 0;
 }
