@@ -40,6 +40,7 @@
 #include "fs/real.h"
 #include "fs/tty.h"
 #include "kernel/fs.h"
+#include "kernel/errno.h"
 #include "kernel/task.h"
 #include "kernel/init.h"
 
@@ -60,6 +61,15 @@ extern void (*exit_hook)(struct task *task, int code);
 
 static ish_ffi_exit_cb g_exit_cb = NULL;
 static void           *g_exit_ctx = NULL;
+static pthread_t       g_kernel_thread;
+static int             g_kernel_thread_started = 0;
+
+/* Strong override for the weak standalone default in kernel/exit.c.
+ * Embedded PID 1 exit must unwind only its joinable kernel pthread; it must
+ * never terminate the containing iOS app process. */
+int ish_embed_soft_halt_enabled(void) {
+    return 1;
+}
 
 static void embed_exit_handler(struct task *task, int code) {
     /* Match iSH convention: code is (status<<8) | (signal&0xff). */
@@ -73,7 +83,7 @@ static void embed_exit_handler(struct task *task, int code) {
 void ish_ffi_register_exit_hook(ish_ffi_exit_cb cb, void *ctx) {
     g_exit_cb  = cb;
     g_exit_ctx = ctx;
-    exit_hook  = embed_exit_handler;
+    exit_hook  = cb ? embed_exit_handler : NULL;
 }
 
 /* ------------------------------------------------------------------ *
@@ -134,6 +144,14 @@ static struct fd *open_fd_from_real(int real_fd) {
     return fd;
 }
 
+/* Roll back a wrapper allocation without consuming the caller-owned real fd.
+ * Ownership transfers only after all three stdio wrappers are installed. */
+static void discard_fd_wrapper(struct fd *fd) {
+    if (!fd) return;
+    fd->real_fd = -1;
+    fd_close(fd);
+}
+
 int ish_ffi_install_pipe_stdio(int in_rd, int out_wr_a, int out_wr_b) {
     if (in_rd < 0 || out_wr_a < 0 || out_wr_b < 0) return -EINVAL;
     /* iSH FD limit is around 256 inside the kernel; do NOT F_DUPFD with
@@ -141,9 +159,13 @@ int ish_ffi_install_pipe_stdio(int in_rd, int out_wr_a, int out_wr_b) {
     struct fd *f0 = open_fd_from_real(in_rd);
     if (!f0) return -ENOMEM;
     struct fd *f1 = open_fd_from_real(out_wr_a);
-    if (!f1) { fd_close(f0); return -ENOMEM; }
+    if (!f1) { discard_fd_wrapper(f0); return -ENOMEM; }
     struct fd *f2 = open_fd_from_real(out_wr_b);
-    if (!f2) { fd_close(f0); fd_close(f1); return -ENOMEM; }
+    if (!f2) {
+        discard_fd_wrapper(f0);
+        discard_fd_wrapper(f1);
+        return -ENOMEM;
+    }
     current->files->files[0] = f0;
     current->files->files[1] = f1;
     current->files->files[2] = f2;
@@ -210,15 +232,16 @@ static int create_devices_under(const char *prefix) {
 
     #undef MK
 
-    /* Mount the kernel's devpts so /dev/pts/N nodes exist on demand
-     * when posix_openpt allocates them. iSH's devptsfs is a synthetic
-     * filesystem (no on-disk state), so this is cheap and safe to
-     * call multiple times: mount_remove() / re-mount the same path
-     * are idempotent inside iSH's mount table. */
+    /* Mount the kernel's devpts so /dev/pts/N nodes exist on demand when
+     * posix_openpt allocates them. do_mount's contract requires mounts_lock
+     * even though this startup-only call runs before the kernel pthread. */
     {
         char pts_dir[MAX_PATH];
         snprintf(pts_dir, sizeof(pts_dir), "%s/dev/pts", prefix);
-        do_mount(&devptsfs, "devpts", pts_dir, "", 0);
+        lock(&mounts_lock);
+        int mount_err = do_mount(&devptsfs, "devpts", pts_dir, "", 0);
+        unlock(&mounts_lock);
+        if (mount_err < 0) return mount_err;
     }
     return 0;
 }
@@ -227,24 +250,72 @@ int ish_ffi_create_devices(void) {
     return create_devices_under("");
 }
 
-int ish_ffi_setup_vm_root(const char *vm_root) {
-    if (!vm_root || !vm_root[0]) return -EINVAL;
-    /* vm_root is something like "/srv/vms/playground" — guest absolute. */
-    return create_devices_under(vm_root);
-}
-
 /* ------------------------------------------------------------------ *
- *  install_executable: write bytes into fakefs through generic_open  *
+ *  install_executable: atomically write bytes through fakefs APIs    *
  * ------------------------------------------------------------------ */
+
+static int verify_installed_executable(const char *guest_path,
+                                       const uint8_t *bytes, size_t len,
+                                       uint32_t mode) {
+    struct statbuf stat = {0};
+    int err = generic_statat(AT_PWD, guest_path, &stat, false);
+    if (err < 0) return err;
+    if (!S_ISREG(stat.mode) || stat.size != (qword_t)len ||
+        (stat.mode & 0777u) != (mode & 0777u))
+        return _EIO;
+
+    struct fd *fd = generic_open(guest_path, O_RDONLY_, 0);
+    if (IS_ERR(fd)) return (int)PTR_ERR(fd);
+    if (!fd->ops || !fd->ops->read) {
+        fd_close(fd);
+        return _EINVAL;
+    }
+
+    uint8_t buf[64 * 1024];
+    size_t compared = 0;
+    while (compared < len) {
+        size_t chunk = len - compared;
+        if (chunk > sizeof(buf)) chunk = sizeof(buf);
+        ssize_t got = fd->ops->read(fd, buf, chunk);
+        if (got < 0) { err = (int)got; goto out; }
+        if (got == 0 || memcmp(buf, bytes + compared, (size_t)got) != 0) {
+            err = _EIO;
+            goto out;
+        }
+        compared += (size_t)got;
+    }
+    {
+        uint8_t extra = 0;
+        ssize_t got = fd->ops->read(fd, &extra, 1);
+        if (got < 0) err = (int)got;
+        else if (got != 0) err = _EIO;
+        else err = 0;
+    }
+
+out: {
+        int close_err = fd_close(fd);
+        if (err >= 0 && close_err < 0) err = close_err;
+    }
+    return err;
+}
 
 int ish_ffi_install_executable(const char *guest_path,
                                const uint8_t *bytes, size_t len,
                                uint32_t mode) {
-    if (!guest_path || !bytes) return -EINVAL;
-    /* Make sure parent exists; we do a best-effort mkdir of /sbin etc. */
-    /* Caller is expected to pre-create directories during rootfs build. */
+    if (!guest_path || guest_path[0] != '/' || guest_path[1] == '\0' ||
+        guest_path[strlen(guest_path) - 1] == '/' || !bytes || len == 0)
+        return _EINVAL;
 
-    struct fd *fd = generic_open(guest_path, O_WRONLY_ | O_CREAT_ | O_TRUNC_, mode & 0777);
+    char temp_path[MAX_PATH + 1];
+    int n = snprintf(temp_path, sizeof(temp_path), "%s.tmp", guest_path);
+    if (n <= 0 || (size_t)n >= sizeof(temp_path)) return _ENAMETOOLONG;
+
+    int err = generic_unlinkat(AT_PWD, temp_path);
+    if (err < 0 && err != _ENOENT) return err;
+
+    struct fd *fd = generic_open(temp_path,
+                                 O_WRONLY_ | O_CREAT_ | O_EXCL_,
+                                 0600);
     if (IS_ERR(fd)) return (int)PTR_ERR(fd);
 
     size_t written = 0;
@@ -252,21 +323,47 @@ int ish_ffi_install_executable(const char *guest_path,
         size_t chunk = len - written;
         if (chunk > 64 * 1024) chunk = 64 * 1024;
         if (!fd->ops || !fd->ops->write) {
-            fd_close(fd);
-            return -EINVAL;
+            err = _EINVAL;
+            goto fail_open;
         }
         ssize_t w = fd->ops->write(fd, bytes + written, chunk);
-        if (w < 0) { fd_close(fd); return (int)w; }
-        if (w == 0) { fd_close(fd); return -EIO; }
+        if (w < 0) { err = (int)w; goto fail_open; }
+        if (w == 0) { err = _EIO; goto fail_open; }
         written += (size_t)w;
     }
-    fd_close(fd);
+
+    if (!fd->ops || !fd->ops->fsync) {
+        err = _EOPNOTSUPP;
+        goto fail_open;
+    }
+    err = fd->ops->fsync(fd);
+    if (err < 0) goto fail_open;
+    err = fd_close(fd);
+    fd = NULL;
+    if (err < 0) goto fail_temp;
 
     /* set executable bits via the metadata-aware setattr path */
     struct attr a = { .type = attr_mode };
     a.mode = (mode_t_)(mode & 0777);
-    generic_setattrat(AT_PWD, guest_path, a, false);
-    return 0;
+    err = generic_setattrat(AT_PWD, temp_path, a, false);
+    if (err < 0) goto fail_temp;
+
+    err = generic_renameat(AT_PWD, temp_path, AT_PWD, guest_path);
+    if (err < 0) goto fail_temp;
+
+    /* fakefs updates a host file plus SQLite metadata. Reopen and compare the
+     * complete artifact so a partial persistence failure cannot reach execve.
+     * A later boot can atomically repair the same content-addressed path. */
+    return verify_installed_executable(guest_path, bytes, len, mode);
+
+fail_open: {
+        int close_err = fd_close(fd);
+        fd = NULL;
+        if (err >= 0 && close_err < 0) err = close_err;
+    }
+fail_temp:
+    (void)generic_unlinkat(AT_PWD, temp_path);
+    return err;
 }
 
 /* ------------------------------------------------------------------ *
@@ -286,6 +383,18 @@ int ish_ffi_execve(const char *guest_path,
  * ------------------------------------------------------------------ */
 
 int ish_ffi_task_start(void) {
-    task_start(current);
+    if (g_kernel_thread_started) return -EBUSY;
+    int rc = task_start_joinable(current);
+    if (rc != 0) return -rc;
+    g_kernel_thread = current->thread;
+    g_kernel_thread_started = 1;
+    return 0;
+}
+
+int ish_ffi_task_join(void) {
+    if (!g_kernel_thread_started) return -EINVAL;
+    int rc = pthread_join(g_kernel_thread, NULL);
+    if (rc != 0) return -rc;
+    g_kernel_thread_started = 0;
     return 0;
 }

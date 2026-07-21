@@ -3,7 +3,8 @@
 # Targets:
 #   make proto    — compile + run protocol unit tests
 #   make ishembed — compile-test ishembed.c (no link)
-#   make ishsv    — compile-test supervisor on host (does NOT run; needs i386-linux-musl-gcc to actually run)
+#   make ishsv    — compile-test supervisor on host (does NOT run; the release
+#                   guest executable is built separately for aarch64-linux-musl)
 #   make all      — all of the above
 #
 # This Makefile is for convenience. The canonical build is via Meson

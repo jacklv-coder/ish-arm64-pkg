@@ -22,12 +22,19 @@
  *     |          payload (LE)         |  payload_len bytes
  *     +-------------------------------+
  *
- * Inside payloads, fixed-width ints are little-endian (matches i386 native
- * memory layout for a static musl supervisor; cheaper than swapping).
+ * Inside payloads, fixed-width ints are explicitly little-endian. The current
+ * AArch64 musl supervisor is little-endian, and the encoding remains fixed for
+ * protocol compatibility rather than depending on a native struct layout.
  *
  * The 12-byte header fields up to payload_len are big-endian so the
  * frame can be parsed identically on either side without endian guesswork
  * for sync detection.
+ *
+ * Compatibility is exact-version: ish_proto_parse_hdr rejects any header
+ * version other than ISH_PROTO_VERSION, and HELLO/HELLO_ACK repeat the same
+ * exact check. Version labels on payload fields below record their historical
+ * introduction; they do not imply runtime interoperability with older peers.
+ * Host and bundled supervisor must therefore be upgraded together.
  */
 
 #ifndef ISH_EMBED_PROTO_H
@@ -37,7 +44,7 @@
 #include <stdint.h>
 
 #define ISH_PROTO_MAGIC      0xE5u
-#define ISH_PROTO_VERSION    3u
+#define ISH_PROTO_VERSION    4u
 #define ISH_PROTO_HDR_SIZE   12   /* magic+ver+type+flags + u32 len + u32 sid  */
 #define ISH_PROTO_MAX_PAYLOAD (1u * 1024u * 1024u)  /* 1 MiB hard cap */
 
@@ -51,6 +58,7 @@
 #define ISH_FT_SHUTDOWN      0x07
 #define ISH_FT_PING          0x08
 #define ISH_FT_RESIZE        0x09  /* set pty winsize for a session (v3) */
+#define ISH_FT_SESSION_CLOSE 0x0A  /* force-close the complete session (v4) */
 
 /* Supervisor -> Host */
 #define ISH_FT_HELLO_ACK     0x40
@@ -85,17 +93,11 @@
  *   u16 init_xpix;  u16 init_ypix;               winsize; all-zero means
  *                                                "use supervisor default")
  *
- * Trailing fields are append-only: a v3 supervisor reading a v2-style
- * payload (no winsize tail) sees payload_len short of the winsize
- * bytes and just sticks with the default 24x80. A v2 supervisor
- * reading a v3 host's payload ignores the trailing 8 bytes for the
- * same reason. (The host negotiates via proto_version in HELLO_ACK
- * and omits the v3 tail when talking to older supervisors.)
- *
- * The chroot field was added in proto v2; supervisors that report
- * proto_version=1 in HELLO_ACK ignore the trailing field gracefully if
- * the host omits it (i.e. host should only emit the chroot field when
- * it knows the supervisor supports it).
+ * Historical field evolution was append-only: chroot was added in v2 and the
+ * winsize tail in v3. The current v4 host always emits both fields. The v4
+ * decoder remains shape-tolerant when an internal test/fixture omits a known
+ * tail, but exact header and HELLO checks reject actual v1/v2/v3 peers before
+ * SPAWN, so this leniency is not cross-version negotiation.
  *
  * SPAWNED payload:
  *   u32 guest_pid
@@ -114,6 +116,10 @@
  *
  * SIGNAL payload:
  *   i32 signum
+ *
+ * SESSION_CLOSE payload:
+ *   empty; force-closes all transports and, while the direct child remains an
+ *   unreaped identity, terminates its tracked group plus a TTY foreground job.
  *
  * RESIZE payload (v3+):
  *   u16 rows

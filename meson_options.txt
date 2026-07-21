@@ -2,5 +2,7 @@ option('ish_src', type: 'string', value: '',
        description: 'absolute path to iSH source tree')
 option('ish_build', type: 'string', value: '',
        description: 'absolute path to iSH build directory containing libish.a etc.')
-option('guest_arch', type: 'combo', choices: ['x86', 'arm64'], value: 'x86',
+option('guest_arch', type: 'combo', choices: ['x86', 'arm64'], value: 'arm64',
        description: 'guest architecture iSH was built for')
+option('supervisor_blob_src', type: 'string', value: '',
+       description: 'generated C source containing the bundled guest supervisor')

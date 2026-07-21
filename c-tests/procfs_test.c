@@ -13,6 +13,7 @@
 
 #define _GNU_SOURCE
 #include <ctype.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -251,8 +252,9 @@ static int case_proc_cpuinfo(ish_embed_instance_t *inst) {
                     &ec, &sg, &so, &sol, &se, &sel);
     int fail = 0;
     if (rc != 0 || ec != 0) { fail = 1; goto out; }
-    /* Guest is x86: cpuinfo MUST NOT advertise arm-specific extensions
-     * that JIT runtimes (Bun/V8) might try to use. */
+    /* The AArch64 guest exposes a conservative emulated baseline. cpuinfo MUST
+     * NOT advertise extensions that the emulator does not implement and that
+     * JIT runtimes (Bun/V8) might otherwise try to use. */
     const char *forbidden[] = {" sve", " sve2", " pac", " mte", NULL};
     for (int i = 0; forbidden[i]; i++) {
         if (line_has(so, sol, forbidden[i])) {
@@ -275,6 +277,26 @@ static int case_uname(ish_embed_instance_t *inst) {
     int fail = (rc != 0 || ec != 0 || sol < 4);
     fprintf(stderr, "uname -a:          %s (%s)\n",
             fail ? "FAIL" : "OK", first_line(so ? so : "", sol));
+    ish_embed_free(so); ish_embed_free(se);
+    return fail;
+}
+
+/* The pinned iSH fork contains an opt-out arm64 BRK-recovery experiment.
+ * Production/host builds define ISH_DISABLE_SKIP_BRK=1; prove that an
+ * unhandled guest SIGTRAP remains fatal instead of resuming the shell. */
+static int case_fatal_sigtrap(ish_embed_instance_t *inst) {
+    int32_t ec = 0, sg = 0;
+    char *so = NULL, *se = NULL; size_t sol = 0, sel = 0;
+    int rc = run_sh(inst, "kill -TRAP $$; echo SIGTRAP_SURVIVED", 5000,
+                    &ec, &sg, &so, &sol, &se, &sel);
+    int fail = rc != 0 || sg != SIGTRAP ||
+        line_has(so, sol, "SIGTRAP_SURVIVED");
+    if (fail) {
+        fprintf(stderr,
+                "  fatal SIGTRAP: rc=%d exit=%d signal=%d stdout=%s\n",
+                rc, ec, sg, first_line(so ? so : "", sol));
+    }
+    fprintf(stderr, "fatal guest SIGTRAP:%s\n", fail ? "FAIL" : "OK");
     ish_embed_free(so); ish_embed_free(se);
     return fail;
 }
@@ -323,9 +345,9 @@ static int run_in_root(ish_embed_instance_t *inst, const char *script,
     return ec;
 }
 
-/* Clone /srv/vms/.template → /srv/vms/proctest if not present, then
- * setup_vm_root so the supervisor mounts /proc, /dev, /dev/pts inside
- * it. Idempotent. */
+/* Clone /srv/vms/.template → /srv/vms/proctest if not present. The first
+ * chrooted spawn below makes the supervisor mount /proc, /dev, /dev/pts in
+ * guest context, so this test also covers automatic VM-root initialization. */
 static int setup_test_vm(ish_embed_instance_t *inst) {
     /* Clone (cheap if already there: cp -a with -n? busybox cp lacks
      * -n. Use a stamp file instead.) */
@@ -339,12 +361,6 @@ static int setup_test_vm(ish_embed_instance_t *inst) {
     if (run_in_root(inst, clone, 60000) != 0) {
         fprintf(stderr, "[setup] failed to clone template into "
                         TEST_VM_ROOT "\n");
-        return -1;
-    }
-    int rc = ish_embed_setup_vm_root(inst, TEST_VM_ROOT);
-    if (rc != 0) {
-        fprintf(stderr, "[setup] setup_vm_root(%s) failed: %s\n",
-                TEST_VM_ROOT, ish_embed_strerror(rc));
         return -1;
     }
     return 0;
@@ -378,6 +394,7 @@ int main(void) {
     fails += case_proc_self_cmdline(inst);
     fails += case_proc_cpuinfo(inst);
     fails += case_uname(inst);
+    fails += case_fatal_sigtrap(inst);
 
     ish_embed_shutdown(inst, 2000);
     fprintf(stderr, "\nprocfs_test: %d failure(s)\n", fails);

@@ -29,6 +29,21 @@ import Foundation
 
 public final class IshTerminal: @unchecked Sendable {
 
+    /// The public callback predates Swift's Sendable annotations and is
+    /// documented to cross onto `handlerQueue`. Keep that source-compatible
+    /// signature while containing the unchecked queue crossing in one place.
+    private final class EventHandlerBox: @unchecked Sendable {
+        let handler: (Event) -> Void
+
+        init(_ handler: @escaping (Event) -> Void) {
+            self.handler = handler
+        }
+
+        func callAsFunction(_ event: Event) {
+            handler(event)
+        }
+    }
+
     // MARK: public surface
 
     public enum Event: Sendable {
@@ -90,7 +105,7 @@ public final class IshTerminal: @unchecked Sendable {
 
     private let emuLock = NSRecursiveLock()
     private var handlerQueue: DispatchQueue = .main
-    private var eventHandler: ((Event) -> Void)?
+    private var eventHandler: EventHandlerBox?
     private let pumpQueue: DispatchQueue
     private var stopped: Bool = false
 
@@ -143,7 +158,7 @@ public final class IshTerminal: @unchecked Sendable {
                                  _ handler: @escaping (Event) -> Void) {
         emuLock.lock()
         self.handlerQueue = queue
-        self.eventHandler = handler
+        self.eventHandler = EventHandlerBox(handler)
         emuLock.unlock()
     }
 

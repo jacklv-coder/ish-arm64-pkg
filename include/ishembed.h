@@ -14,7 +14,7 @@
  *
  * Stdio model:
  *   - The guest's stdin/stdout/stderr are wired to host pipes that carry
- *     a framed multiplexed protocol (see embed/protocol/proto.h).
+ *     a framed multiplexed protocol (see protocol/proto.h).
  *   - The host never touches the process-global stdin/stdout/stderr.
  *
  * Concurrency:
@@ -34,6 +34,49 @@ extern "C" {
 #endif
 
 #define ISH_EMBED_ABI_VERSION 1
+
+/* Native protocol/inbox safety ceilings. The reader drains and drops output
+ * after a session reaches either backlog ceiling, then reports
+ * ISH_ERR_OUTPUT_LIMIT after already-accepted frames are consumed. The control
+ * ceilings count complete wire bytes and frames from admission through actual
+ * free, including the writer's current in-flight frame. A small portion of the
+ * total control budget is unavailable to ordinary calls so internal lifecycle
+ * frames can still be admitted without making the total allocation unbounded. */
+#define ISH_EMBED_MAX_PROTOCOL_FRAME_BYTES    (1024u * 1024u)
+#define ISH_EMBED_MAX_SESSION_BACKLOG_BYTES   (4u * 1024u * 1024u)
+#define ISH_EMBED_MAX_SESSION_BACKLOG_FRAMES  4096u
+#define ISH_EMBED_MAX_ONESHOT_STDOUT_BYTES    (8u * 1024u * 1024u)
+#define ISH_EMBED_MAX_ONESHOT_STDERR_BYTES    (4u * 1024u * 1024u)
+#ifndef ISH_EMBED_MAX_CONTROL_QUEUE_BYTES
+#define ISH_EMBED_MAX_CONTROL_QUEUE_BYTES     (4u * 1024u * 1024u)
+#endif
+#ifndef ISH_EMBED_MAX_CONTROL_QUEUE_FRAMES
+#define ISH_EMBED_MAX_CONTROL_QUEUE_FRAMES    256u
+#endif
+#ifndef ISH_EMBED_CONTROL_CRITICAL_RESERVE_BYTES
+#define ISH_EMBED_CONTROL_CRITICAL_RESERVE_BYTES  (4u * 1024u)
+#endif
+#ifndef ISH_EMBED_CONTROL_CRITICAL_RESERVE_FRAMES
+#define ISH_EMBED_CONTROL_CRITICAL_RESERVE_FRAMES 16u
+#endif
+
+/* SIGNAL is the largest lifecycle-class control frame: 12-byte protocol
+ * header plus a 4-byte payload. Keep the byte reserve large enough for at
+ * least one such frame under every build-time queue configuration. */
+#define ISH_EMBED_MIN_CONTROL_CRITICAL_RESERVE_BYTES 16u
+
+#if ISH_EMBED_CONTROL_CRITICAL_RESERVE_BYTES == 0 || \
+    ISH_EMBED_CONTROL_CRITICAL_RESERVE_BYTES >= ISH_EMBED_MAX_CONTROL_QUEUE_BYTES
+#error "critical control byte reserve must be nonzero and below the total budget"
+#endif
+#if ISH_EMBED_CONTROL_CRITICAL_RESERVE_BYTES < \
+    ISH_EMBED_MIN_CONTROL_CRITICAL_RESERVE_BYTES
+#error "critical control byte reserve must fit the largest lifecycle frame"
+#endif
+#if ISH_EMBED_CONTROL_CRITICAL_RESERVE_FRAMES == 0 || \
+    ISH_EMBED_CONTROL_CRITICAL_RESERVE_FRAMES >= ISH_EMBED_MAX_CONTROL_QUEUE_FRAMES
+#error "critical control frame reserve must be nonzero and below the total budget"
+#endif
 
 typedef struct ish_embed_instance ish_embed_instance_t;
 typedef struct ish_embed_session ish_embed_session_t;
@@ -57,18 +100,32 @@ typedef enum {
     ISH_ERR_SUPERVISOR      = -15, /* supervisor reported error frame      */
     ISH_ERR_OOM             = -16,
     ISH_ERR_BROKEN_PIPE     = -17,
+    ISH_ERR_OUTPUT_LIMIT    = -18, /* native session backlog ceiling reached */
+    ISH_ERR_BUSY            = -19, /* active sessions prevent shutdown          */
+    ISH_ERR_SUPERVISOR_INSTALL = -20, /* bundled PID 1 install/verification failed */
+    ISH_ERR_CONTROL_LIMIT   = -21, /* host-to-guest control queue ceiling reached */
     ISH_ERR_INTERNAL        = -99,
 } ish_embed_status_t;
 
 typedef struct ish_embed_boot_opts {
-    const char *rootfs_path;            /* host fs path to fakefs root (the dir that has data/ + meta.db) */
+    const char *rootfs_path;            /* writable host path to fakefs root (the dir with data/ + meta.db) */
     const char *workdir;                /* guest cwd for PID1 (e.g. "/")                                  */
-    const char *supervisor_guest_path;  /* guest path to PID1 binary (default: "/sbin/ishsv")             */
-    int kernel_log_fd;                  /* host fd that receives iSH printk; -1 to send to stderr         */
+    /* In a release XCFramework, NULL atomically installs the bundled PID 1 at
+     * its private content-addressed SHA-256 path, verifies its complete bytes
+     * and mode, and does not replace a RootFS-owned /sbin/ishsv. Source builds
+     * without a bundled blob retain /sbin/ishsv as a compatibility fallback.
+     * A non-NULL override is executed as-is and skips bundled installation. */
+    const char *supervisor_guest_path;
+    /* Optional best-effort supervisor/kernel log sink. The runtime duplicates
+     * this descriptor during boot, never takes ownership of the caller's fd,
+     * and may drop log bytes instead of blocking protocol progress. -1 selects
+     * a private duplicate of stderr; an unavailable sink disables logs. */
+    int kernel_log_fd;
     int reserved_flags;
 } ish_embed_boot_opts_t;
 
-/* Boot the kernel. Returns ISH_OK on success. After this returns 0, the
+/* Boot the kernel. out_instance is required and receives the only reachable
+ * instance handle. Returns ISH_OK on success. After this returns 0, the
  * supervisor is running as PID 1 and ready to accept SPAWN frames. */
 int ish_embed_boot(const ish_embed_boot_opts_t *opts,
                    ish_embed_instance_t **out_instance);
@@ -87,9 +144,9 @@ typedef struct ish_embed_spawn_opts {
     const char *chroot_path;
     int reserved_flags;
     /* Initial pty winsize. Only honored when allocate_tty != 0; pipe
-     * spawns ignore them. 0 = use supervisor default (24x80 for rows /
-     * cols, unknown for pixels). Added in proto v3 — older
-     * supervisors silently fall back to their default. */
+     * spawns ignore it. 0 = use supervisor default (24x80 for rows /
+     * cols, unknown for pixels). This field was introduced in proto v3;
+     * the current host and supervisor require the same exact wire version. */
     uint16_t init_rows;
     uint16_t init_cols;
     uint16_t init_xpixel;
@@ -106,17 +163,31 @@ typedef struct ish_embed_oneshot_result {
     int32_t  timed_out;
 } ish_embed_oneshot_result_t;
 
-/* Run a single command and return after it exits (or timeout). */
+/* Run a single command and return after it exits (or timeout). A nonzero
+ * timeout starts at API entry and includes waiting for internal SPAWN staging
+ * and control-queue admission. If cleanup cannot be admitted or reaped within
+ * its bounded grace period, the instance is stopped so no unowned guest
+ * command can survive the call. */
 int ish_embed_run_oneshot(ish_embed_instance_t *inst,
                           const ish_embed_spawn_opts_t *opts,
                           ish_embed_oneshot_result_t *out_result);
 
 void ish_embed_free(void *p);
 
-/* Spawn and return a session handle for streaming I/O. */
+/* Synchronous control operations return ISH_ERR_CONTROL_LIMIT only when their
+ * next frame was not admitted; an ISH_OK result means that complete frame was
+ * written to the supervisor pipe. Spawn and return a session handle for
+ * streaming I/O. */
 int ish_embed_spawn(ish_embed_instance_t *inst,
                     const ish_embed_spawn_opts_t *opts,
                     ish_embed_session_t **out_session);
+
+/* Borrow a session across a concurrent API call. The handle returned by
+ * ish_embed_spawn owns one reference. ish_embed_session_close consumes that
+ * owner reference; every successful retain must be paired with release.
+ * Retain/release do not make it valid to start a new borrow after close. */
+int ish_embed_session_retain(ish_embed_session_t *s);
+void ish_embed_session_release(ish_embed_session_t *s);
 
 /* Read available stdout/stderr bytes. Blocks up to wait_ms (0 = nonblock,
  * UINT32_MAX = wait forever). Output:
@@ -133,11 +204,20 @@ int ish_embed_session_read(ish_embed_session_t *s,
                            int32_t  *out_exit_code,
                            int32_t  *out_signal);
 
+/* Queue stdin bytes for ordered delivery. The host transport splits large
+ * writes into bounded frames; guest PID 1 maintains a 1 MiB per-session stdin
+ * queue and handles partial nonblocking child writes. Queue overflow or a hard
+ * child write error is terminal for that session. After close_stdin, writes
+ * return ISH_ERR_BROKEN_PIPE. If the bounded host control transport cannot
+ * admit the next chunk, the call returns ISH_ERR_CONTROL_LIMIT; earlier chunks
+ * from the same call have already been delivered. */
 int ish_embed_session_write(ish_embed_session_t *s,
                             const uint8_t *buf, size_t len);
 
-/* Send a Unix signal to the session's process group. signum is the standard
- * Linux signal number (SIGINT=2, SIGTERM=15, ...). */
+/* Send a Unix signal to the tracked command's process group. signum is the
+ * standard Linux signal number (SIGINT=2, SIGTERM=15, ...). For a TTY shell,
+ * this direct operation deliberately does not retarget a foreground job;
+ * terminal-control signals should be written as control bytes instead. */
 int ish_embed_session_signal(ish_embed_session_t *s, int signum);
 
 /* Resize the session's pty (if any) and deliver SIGWINCH to the
@@ -147,25 +227,37 @@ int ish_embed_session_resize(ish_embed_session_t *s,
                               uint16_t rows, uint16_t cols,
                               uint16_t xpixel, uint16_t ypixel);
 
-/* SIGTERM, then SIGKILL after grace_ms. */
+/* SIGTERM, then SIGKILL after the supervisor's fixed ~1.5s interval. For TTY
+ * sessions this targets both the tracked shell group and its current foreground
+ * job group. grace_ms is retained for source compatibility and is ignored. */
 int ish_embed_session_terminate(ish_embed_session_t *s, uint32_t grace_ms);
 
 /* Close stdin (EOF). */
 int ish_embed_session_close_stdin(ish_embed_session_t *s);
 
-/* Free the session handle. If the child is still running, sends SIGKILL
- * and waits up to 1s for reap. */
+/* Close the session and consume its owner reference. If the tracked command is
+ * still running, the supervisor force-closes its transport, terminates the
+ * tracked group plus any TTY foreground job, and the host waits up to 1s for
+ * reap. SESSION_CLOSE uses reserved, asynchronous control capacity so a blocked
+ * writer cannot trap this void API indefinitely. If admission fails or reap is
+ * not observed within 1s, the instance enters shutdown and closes the control
+ * direction; this prevents a live guest command from outliving its last host
+ * handle. Existing retained calls may finish safely; new calls fail with
+ * ISH_ERR_NO_SESSION. */
 void ish_embed_session_close(ish_embed_session_t *s);
 
-/* Politely shut down the supervisor and join the kernel pthread.
- * After this, the IshInstance is invalidated; you cannot boot another
- * one in this process. */
+/* Politely shut down the supervisor and join the kernel pthread. All sessions
+ * must be closed and all instance calls must have returned first, otherwise
+ * ISH_ERR_BUSY is returned. After successful shutdown, the IshInstance is
+ * invalidated; you cannot boot another one in this process. */
 int ish_embed_shutdown(ish_embed_instance_t *inst, uint32_t grace_ms);
 
-/* Initialise device nodes + devpts mount inside a VM subtree so that
- * processes chrooted into <vm_root> can allocate ptys. Call once per
- * newly-created VM, after the VM's directory tree has been populated.
- * vm_root is a guest-absolute path like "/srv/vms/playground". */
+/* Legacy compatibility entry point. It validates a live instance and a
+ * non-empty guest-absolute vm_root, but performs no filesystem operation.
+ * Before every SPAWN using an absolute chroot_path, PID 1 revalidates device
+ * nodes, devpts/procfs, and required runtime directories, repairing missing
+ * state where safe. This legacy function itself does not check whether vm_root
+ * already exists. */
 int ish_embed_setup_vm_root(ish_embed_instance_t *inst, const char *vm_root);
 
 const char *ish_embed_strerror(int status);

@@ -1,0 +1,279 @@
+# IshEmbed troubleshooting
+
+[简体中文](troubleshooting.md) | English
+
+First decide whether the failure belongs to the manifest binary, source,
+locally built XCFramework, RootFS, or PocketRoot product layer. The most common
+Stage1 category error is treating “ABI-transition source merged” as “transition
+binary already published.”
+
+## First: record the version matrix
+
+```sh
+git rev-parse HEAD
+git submodule status third_party/ish
+rg 'ISH_EMBED_ABI_VERSION' include/ishembed.h
+rg 'ISH_PROTO_VERSION' protocol/proto.h
+rg -n 'url:|checksum:' Package.swift
+git status --short
+```
+
+Also record Xcode/Swift/Zig versions, runtime platform, XCFramework origin and
+checksum, and RootFS provenance, size, and SHA-256. Without this matrix, logs
+may describe different states.
+
+The correct pre-publication Stage1 combination is C ABI 1, wire v4, Swift not
+calling retain/release, and a manifest still pointing at v0.3.3. After
+`v0.4.0-abi.1` publication, only the manifest URL/checksum should switch to the
+transition asset.
+
+## Missing retain/release or other link symbols
+
+Symptom: the linker reports undefined `ish_embed_session_retain`,
+`ish_embed_session_release`, or join/soft-halt symbols.
+
+```sh
+nm -gU path/to/libIshKernel.a | awk '{print $NF}' | sort -u \
+  | rg 'ish_embed_session_(retain|release)|ish_ffi_task_join|soft_halt'
+```
+
+- If Stage1 Swift calls retain/release, Stage2 code leaked in. Restore the
+  old-ABI-compatible Swift layer; do not expect the manifest's v0.3.3 binary to
+  provide new symbols.
+- If a local Stage1 XCFramework lacks them, it was built from an old commit,
+  gitlink, or cache. Rebuild in an isolated path.
+- If the Release is public but the manifest is still v0.3.3, inspect whether the
+  release commit/default-branch fast-forward completed. Never guess a checksum.
+
+## `Package.swift` looks “not updated”
+
+Between Stage1 PR merge and Release publication, a v0.3.3 manifest pin is
+expected. The release script rebuilds and validates assets from the merged
+commit, creates a manifest-only release commit, publishes and verifies assets,
+then fast-forwards the default branch. Thus the branch never advertises a 404 URL.
+
+Only after confirming that the `v0.4.0-abi.1` Release is public is an old
+manifest abnormal:
+
+```sh
+gh release view v0.4.0-abi.1 --repo jacklv-coder/ish-arm64-pkg
+git ls-remote --tags origin refs/tags/v0.4.0-abi.1
+git fetch origin
+git log --oneline --decorate -5 origin/main
+```
+
+## Boot failure
+
+Check each layer:
+
+1. RootFS must be the writable fakefs directory containing `data/` and
+   `meta.db`, not a tar.gz, Alpine directory, or host `/`.
+2. Check sandbox permission, free space, file protection, and path lifetime.
+3. The default supervisor path uses the release XCFramework's embedded blob.
+   A custom `supervisorGuestPath` skips embedded installation; the caller must
+   supply a guest-absolute static AArch64 ELF with executable mode and wire v4.
+4. Preserve output sent to `kernelLogFD`. Logs are best-effort and do not replace
+   the return code.
+
+For a local `scripts/run-host-tests.sh` failure, first run
+`scripts/build-rootfs.sh --print-identity`, then
+`scripts/build-rootfs.sh --verify-bundle build`. The runner only reuses a
+four-artifact generation whose receipt/recipe, SQLite row types/16-byte
+stats/single root, meta/data paths, and critical AArch64 digests validate. Lock
+files intentionally remain; kernel `flock`, not file existence, determines
+ownership, so do not delete or take over one merely because it exists.
+Replacement exchange keeps `build/fs` visible, failure restores the current
+generation, and success discards the old generation with staging rather than
+creating `fs.previous.*`. If SIGKILL/power loss interrupts multi-path publish,
+receipt-last makes the partial generation fail validation and rebuild next time;
+do not manually splice receipts, archives, or directories.
+
+Do not interpret `ROOTFS_RECEIPT` or a successful `--verify-bundle` as “current
+`fs` equals the tar.” The receipt binds the static marker and initial
+`fs.tar.gz`/`SHA256SUMS`. After legitimate runtime writes, verification checks
+current-tree structure, database/critical identity, and initial archive
+integrity, but does not compare every current-tree byte with the tar. The initial
+tar is not a current-tree recovery backup and cannot be committed or shipped in
+a Release.
+
+Stage1 Swift still exposes `IshError.raw(code, message)`; do not write diagnosis
+against Stage2 typed statuses. [`include/ishembed.h`](../include/ishembed.h) is
+authoritative for C status codes.
+
+## `fs-codex` provision or `--verify` failure
+
+Preserve `build/fs-codex.provision.log`, then check `CODEX_PKG`, `CODEX_VERSION`,
+`CODEX_VM_NAME`, and `CODEX_BIN_NAME`. An exact SemVer such as `1.2.3` requires
+the npm-installed version to match byte for byte. `latest` or another dist-tag
+may resolve differently, but schema 2 records both request kind and actual
+version. Never edit the identity to bypass a wrong install.
+
+Validation also requires `package.json` to map `CODEX_BIN_NAME` to a safe
+relative target. That target must be a guest-executable regular file in both
+host backing and fakefs metadata, while `/usr/local/bin/<name>` must resolve
+exactly to it through a same-inode hardlink or safe symlink. Missing or
+non-executable entries, escaping symlinks, version drift, or changed clean
+RootFS content reject reuse and force provisioning. If reprovisioning fails,
+the old `fs-codex` remains unchanged.
+
+## `ISH_ERR_PROTOCOL` / handshake failure
+
+Host and supervisor must use exact-match wire v4. Common causes:
+
+- new host library configured to execute an old RootFS `/sbin/ishsv`;
+- rebuilding only the supervisor or only the library;
+- an old XCFramework in app caches;
+- unframed bytes, a truncated frame, or payload over 1 MiB.
+
+Prefer the XCFramework's embedded supervisor and obtain both peers from one
+clean build. Public C ABI 1 and internal wire v4 appearing together is correct;
+do not change the ABI constant to 4 to “fix” the handshake.
+
+## Spawn/chroot failure
+
+- `argv` must be nonempty and the guest executable/cwd must exist.
+- `chrootPath` is a guest absolute path such as `/srv/vms/default`, not a host URL.
+- Guest PID 1 rechecks devices, devpts/procfs, and required directories for every
+  absolute chroot spawn. Inspect supervisor logs and RootFS writability/integrity.
+- Chroot is not an adversarial sandbox. PocketRoot still owns permission,
+  network, and resource policy.
+
+## No session `EXITED` and the log reports instance fail-close
+
+This is a conservative failure because the supervisor could not prove that all
+guest descendants were removed; it is not a normal session exit. After cleaning
+the tracked group and TTY foreground job, PID 1 also handles untracked children
+adopted by the subreaper after double fork/`setsid` and requires two consecutive
+clean `/proc` scans. A scan, exact-PID kill, reap, or two-second deadline failure
+causes guest-instance-wide last-resort cleanup and supervisor exit, without a
+successful `EXITED` or `SHUTDOWN_ACK`.
+
+- Do not synthesize an exit status for the missing success frame or reuse that
+  instance; finish host-side close/shutdown and boot a new one.
+- Preserve the guest-log fail-close reason and inspect procfs, iSH child reaping,
+  and whether a custom supervisor came from the same build as the XCFramework.
+- Product timeouts still apply to commands that daemonize. This cleanup is a
+  final isolation-integrity guard, not a background-service lifecycle API.
+
+## Output stops or `ISH_ERR_OUTPUT_LIMIT`
+
+Native limits are the final memory guard: 1 MiB per payload, 4 MiB/4096 unread
+frames per session, 8 MiB one-shot stdout, and 4 MiB one-shot stderr.
+
+- Continuously `read` streaming sessions on a separate task; do not wait for
+  child exit before draining.
+- Check for blocking reads or CPU-heavy parsing on the main actor.
+- Enforce a smaller product budget and close stdin/terminate/close on overflow.
+- Stdin is also queued with a bound; do not produce indefinitely when the guest
+  is not consuming.
+
+Stage1 does not deliver new Terminal callback-drop events or VT parser limits.
+Logs mentioning those APIs indicate Stage2 candidate source, not this stage.
+
+## `ISH_ERR_CONTROL_LIMIT`
+
+The global host→guest control budget (4 MiB/256 complete wire frames) could not
+admit the next frame, usually because the supervisor stopped reading or the
+control pipe is severely congested. The failing next frame was not admitted, but
+a large `ish_embed_session_write` is split into frames and an earlier chunk may
+already be delivered; the whole call is not an atomic write.
+
+Within the total budget, 4 KiB/16 frames are reserved only for internal
+close/shutdown lifecycle cleanup. Ordinary calls cannot consume them. If even a
+critical frame cannot be admitted, the writer fails, or session close is not
+confirmed within one second, the runtime closes the control direction so the
+guest cleans up every child on EOF. New calls then return not-running; finish
+session close and instance shutdown instead of trying to reuse that instance.
+
+- Pause new input and do not retry in a zero-delay loop; keep draining session
+  events/output and observe exit state.
+- If the supervisor is unresponsive, terminate/close the session under the
+  product timeout policy instead of accumulating input indefinitely.
+- If the application protocol retries after this error, use idempotent commands
+  or an explicit offset/acknowledgement scheme for partial delivery.
+
+## Crash or error during concurrent close/read/write
+
+The native C API supports overlap between an already-retained call and close.
+Stage1 Swift does not use the new reference functions because it must link the
+v0.3.3 binary. Instead, `IshSessionCallGate` automatically prevents close/call
+UAF: close detaches the handle, rejects new calls, waits for every admitted C
+call, and only then invokes native close. Callers no longer need their own lock
+around every I/O operation.
+
+A `read(timeout: nil)` uses 100 ms C-read polls and normally re-enters the gate
+after the current poll. Close has no fixed upper bound, however. If an admitted
+non-read C call, such as a blocked write under v0.3.3 or a custom supervisor,
+never returns, close also waits indefinitely.
+
+Callers should still stop and await read/write/signal tasks, then call the
+idempotent `close()` and start no new operation afterward. Full native
+borrowing/cancellation/typed lifecycle remains Stage2. Adding retain/release
+calls alone to Stage1 breaks old-binary linkage.
+
+## Shutdown returns busy
+
+`ISH_ERR_BUSY` means a live session or active instance call remains:
+
+1. stop and await spawn/runOneshot;
+2. finish/await read, write, and signal calls;
+3. close every session;
+4. call shutdown again.
+
+The Stage1 Swift instance gate holds a lease for each oneshot and retains a
+spawn lease until the session's native close completes. Any lease makes
+shutdown immediately busy before entering v0.3.3 native code; overlapping boot
+or shutdown transitions are also rejected. Native shutdown failure preserves
+the handle for retry. This prevents old-ABI UAF but does not cancel a call, so
+await it before retrying. The transition native runtime can likewise return busy
+or the corresponding error for this state.
+
+Never boot again in the same process after successful shutdown. Process-global
+and TLS iSH state makes one lifecycle an explicit architecture constraint.
+
+## iOS build or test failure
+
+- Confirm arm64 macOS, full Xcode, and an available iOS 18+ simulator.
+- Do not reuse a build directory from another commit, gitlink, or Zig version.
+- If `build-check` reports missing `-DISH_DISABLE_SKIP_BRK=1`, safely
+  reconfigure or rebuild that dedicated directory. Do not bypass the gate and
+  reuse a cache that suppresses fatal guest SIGTRAP.
+- `Package.swift` minimum iOS, actual final-link deployment target, and
+  XCFramework slices must all be iOS 18/arm64.
+- `test-swift-ios.sh --manifest-binary` tests the old/published pin; no argument
+  or a path tests the new local binary. They answer different questions.
+- On sanitizer failure, diagnose the first stack before later cancellation or
+  leak noise.
+
+## Documentation or script gate failure
+
+```sh
+scripts/check-docs.sh
+scripts/test-check-docs.sh
+bash -n scripts/*.sh
+scripts/test-release-version-policy.sh
+git diff --check
+```
+
+- Every language pair must exist. Chinese pages contain an English switch link
+  to the matching mirror, and English pages contain a Simplified Chinese switch
+  link back to the matching primary document.
+- Remove links whenever removing documents. Stage1 must not restore a v0.4
+  migration guide because the complete Swift API is not delivered.
+- ABI-specific release notes belong only to `v*-abi.*`; ordinary rc or stable
+  tags must not receive them.
+
+## Release failure
+
+Do not immediately delete a tag/draft or rerun the same tag. Save the printed
+staging path, Release id, release commit, tag raw OID, and digests, then follow
+the [release recovery guide](releasing.en.md#failure-and-recovery). A network
+failure after publication PATCH is an uncertain state; automatic deletion could
+remove a valid public object.
+
+## Filing an issue
+
+Include parent commit, iSH gitlink, manifest URL/checksum, local/Release
+XCFramework digest, C ABI/wire versions, iOS/Xcode/Zig versions, RootFS manifest
+(without restricted assets), minimal reproduction, status code, logs, and exact
+test command. Remove tokens, private keys, personal paths, and product data.

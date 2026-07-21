@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-and-build:
+    name: Native, Swift, and iOS 18 integration
+    runs-on: macos-15
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository and iSH source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          submodules: true
+
+      - name: Install native build tools
+        run: brew install meson ninja lld zig
+
+      - name: Validate repository metadata and scripts
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
+            git diff --check "${{ github.event.pull_request.base.sha }}...HEAD"
+          else
+            before="${{ github.event.before }}"
+            if [[ "$before" =~ ^[0-9a-f]{40}$ && \
+                  "$before" != 0000000000000000000000000000000000000000 ]] && \
+               git cat-file -e "$before^{commit}" 2>/dev/null; then
+              git diff --check "$before..HEAD"
+            else
+              empty_tree="$(git hash-object -t tree /dev/null)"
+              git diff --check "$empty_tree..HEAD"
+            fi
+          fi
+          bash -n scripts/*.sh
+          scripts/check-docs.sh
+          scripts/test-check-docs.sh
+          scripts/test-build-ios-path-safety.sh
+          scripts/test-run-host-tests.sh
+          scripts/test-release-tag-cas.sh
+          scripts/test-release-version-policy.sh
+          scripts/test-source-policy.sh
+          swift package dump-package >/dev/null
+
+      - name: Link and test Swift API against the published manifest binary
+        run: scripts/test-swift-ios.sh --manifest-binary
+
+      - name: Run deterministic lifecycle tests with sanitizers
+        run: |
+          meson setup build-ci \
+            -Dish_src="$PWD/third_party/ish" \
+            -Dguest_arch=arm64 \
+            -Db_sanitize=address,undefined \
+            -Db_lundef=false \
+            -Dwerror=true
+          meson compile -C build-ci
+          meson test -C build-ci --print-errorlogs --repeat 5
+
+      - name: Run deterministic lifecycle tests with ThreadSanitizer
+        run: |
+          meson setup build-ci-tsan \
+            -Dish_src="$PWD/third_party/ish" \
+            -Dguest_arch=arm64 \
+            -Db_sanitize=thread \
+            -Db_lundef=false \
+            -Dwerror=true
+          meson compile -C build-ci-tsan
+          meson test -C build-ci-tsan --print-errorlogs
+
+      - name: Build iOS 18 XCFramework
+        env:
+          PATH: /opt/homebrew/opt/llvm/bin:/opt/homebrew/opt/lld/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin
+        run: scripts/build-ios.sh
+
+      - name: Verify slices, ABI symbols, and final links
+        run: scripts/verify-ios-artifact.sh
+
+      - name: Link and test Swift API on an arm64 iOS simulator
+        run: scripts/test-swift-ios.sh
