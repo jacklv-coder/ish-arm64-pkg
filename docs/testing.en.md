@@ -286,7 +286,7 @@ Acceptance checks:
    in-slice library/header paths and all of their parents are symlink-free;
 2. both libraries are arm64 only; apart from archive symbol indexes, every
    Mach-O member must be parsed by `otool` and have an iOS/iOS Simulator
-   `LC_BUILD_VERSION` with minos no higher than 18; real C final links target
+   `LC_BUILD_VERSION` with `minos` exactly 18.0; real C final links target
    `arm64-apple-ios18.0` and `arm64-apple-ios18.0-simulator`, treat linker
    warnings as errors, and have `vtool` report the exact platform and iOS 18;
 3. exported symbols include session retain/release, shutdown, bundled supervisor,

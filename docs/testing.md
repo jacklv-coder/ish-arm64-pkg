@@ -233,7 +233,7 @@ scripts/verify-ios-artifact.sh
    `LibraryPath`/`BinaryPath=libIshKernel.a`、`HeadersPath=Headers`；slice 内路径经过规范化，
    且 library、headers 及父路径都不是 symlink；
 2. 两个 library 都只有 arm64；除 archive 符号索引外，每个 Mach-O member 都必须被
-   `otool` 解析，其 `LC_BUILD_VERSION` 分别是 iOS/iOS Simulator 且 minos 不高于 18；
+   `otool` 解析，其 `LC_BUILD_VERSION` 分别是 iOS/iOS Simulator 且 `minos` 必须严格为 18.0；
    实际 C final link 分别使用
    `arm64-apple-ios18.0` 与 `arm64-apple-ios18.0-simulator`，linker warning 视为失败，
    `vtool` 精确报告对应平台与 iOS 18；
