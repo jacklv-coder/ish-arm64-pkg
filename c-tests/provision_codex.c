@@ -16,13 +16,13 @@
  *
  * The supervisor flow:
  *   1. Clone /srv/vms/.template -> /srv/vms/$VM_NAME (idempotent).
- *   2. setup_vm_root($VM_ROOT)  — mounts /proc /dev/pts inside chroot.
+ *   2. First chrooted spawn asks guest PID 1 to prepare /proc and /dev/pts.
  *   3. apk add --no-cache nodejs npm.
  *   4. npm install -g $NPM_PKG[@$NPM_VERSION].
- *   5. which $BIN_NAME — print resolved path for sanity.
+ *   5. command -v + test -x $BIN_NAME — require an executable entry.
  *
  * Streams guest stdout+stderr to stderr in real time so a slow npm
- * install is observable. Exits 0 if both commands return 0.
+ * install is observable. Exits 0 only if every required step succeeds.
  */
 
 #define _GNU_SOURCE
@@ -34,6 +34,7 @@
 
 #include "ishembed.h"
 #include "proto.h"  /* ISH_STREAM_* */
+#include "provision_codex_format.h"
 
 static const char *getenv_def(const char *k, const char *def) {
     const char *v = getenv(k);
@@ -152,9 +153,12 @@ int main(void) {
     char vm_root[256];
     snprintf(vm_root, sizeof(vm_root), "/srv/vms/%s", vm_name);
 
-    char npm_target[256];
-    if (ver[0]) snprintf(npm_target, sizeof(npm_target), "%s@%s", pkg, ver);
-    else        snprintf(npm_target, sizeof(npm_target), "%s", pkg);
+    char npm_target[ISH_PROVISION_NPM_TARGET_CAPACITY];
+    if (ish_provision_format_npm_target(npm_target, sizeof(npm_target),
+                                        pkg, ver) < 0) {
+        fprintf(stderr, "npm package/version target is too long\n");
+        return 2;
+    }
 
     fprintf(stderr, "[provision] VM=%s pkg=%s bin=%s\n",
             vm_root, npm_target, bin_name);
@@ -194,14 +198,6 @@ int main(void) {
         return 1;
     }
 
-    int rc2 = ish_embed_setup_vm_root(inst, vm_root);
-    if (rc2 != 0) {
-        fprintf(stderr, "setup_vm_root(%s) failed: %s\n",
-                vm_root, ish_embed_strerror(rc2));
-        ish_embed_shutdown(inst, 2000);
-        return 1;
-    }
-
     int fails = 0;
 
     /* Optional cache refresh; ignore failure (network may be sluggish). */
@@ -231,12 +227,18 @@ int main(void) {
     fails += (run_streaming(inst, "npm-install", script, 1200000,
                             vm_root) != 0);
 
-    /* Sanity: where did the binary land? */
-    char which_cmd[256];
+    /* Hard gate: npm success alone is insufficient. Require that the guest
+     * command lookup resolves BIN_NAME to an executable entry. BIN_NAME is
+     * constrained to shell-safe characters by provision-codex-rootfs.sh. */
+    char which_cmd[512];
     snprintf(which_cmd, sizeof(which_cmd),
-             "which %s || true; ls -la $(which %s) 2>/dev/null || true",
+             "expected=/usr/local/bin/%s; resolved=$(command -v %s) && "
+             "test \"$resolved\" = \"$expected\" && "
+             "test -x \"$resolved\" && "
+             "printf '%%s\\n' \"$resolved\" && ls -la \"$resolved\"",
              bin_name, bin_name);
-    run_streaming(inst, "which-bin", which_cmd, 10000, vm_root);
+    fails += (run_streaming(inst, "verify-bin", which_cmd, 10000,
+                            vm_root) != 0);
 
     ish_embed_shutdown(inst, 5000);
     fprintf(stderr, "\nprovision: %d failure(s)\n", fails);

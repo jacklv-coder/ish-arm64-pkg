@@ -16,19 +16,20 @@
 // directly), run:
 //
 //     git submodule update --init
-//     scripts/build-rootfs.sh
 //     PATH="/opt/homebrew/opt/llvm/bin:/opt/homebrew/opt/lld/bin:$PATH" \
 //         scripts/build-ios.sh
 //
 // then change the `IshKernel` target below to a `.binaryTarget(path:)`.
+// `scripts/build-rootfs.sh` is only needed for local host integration tests;
+// its output is not part of the XCFramework or a distributable package.
+// Nested iSH submodules are not inputs to this package build.
 
 import PackageDescription
 
 let package = Package(
     name: "IshEmbed",
     platforms: [
-        .iOS(.v14),
-        .macOS(.v12),
+        .iOS("18.0"),
     ],
     products: [
         .library(name: "IshEmbed", targets: ["IshEmbed"]),

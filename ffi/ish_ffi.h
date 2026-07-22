@@ -9,7 +9,7 @@
  * Strings are null-terminated UTF-8.
  *
  * Threading: ish_ffi_mount_fakefs / ish_ffi_become_init / ish_ffi_install_pipe_stdio /
- * ish_ffi_install_executable / ish_ffi_chdir / ish_ffi_execve_path MUST run on the
+ * ish_ffi_install_executable / ish_ffi_chdir / ish_ffi_execve MUST run on the
  * thread that will be promoted to PID1 (typically the kernel pthread before
  * task_run_current() starts the loop).
  *
@@ -45,21 +45,18 @@ int ish_ffi_install_pipe_stdio(int in_rd, int out_wr_a, int out_wr_b);
 /* chdir the current task. */
 int ish_ffi_chdir(const char *guest_path);
 
-/* Install an executable into the fakefs at runtime, going through the
- * iSH file APIs so that fakefs metadata stays consistent.
- * `mode` is the unix mode bits (e.g. 0755). */
+/* Install an executable into fakefs using a same-directory temporary file,
+ * fsync, checked metadata update, rename, and full read-back verification.
+ * The final path is never truncated in place. `mode` is the Unix mode bits
+ * (e.g. 0755). */
 int ish_ffi_install_executable(const char *guest_path,
                                const uint8_t *bytes, size_t len,
                                uint32_t mode);
 
 /* Create essential device nodes (/dev/null, tty, ptmx, etc.) under the
- * real fs root, and mount devpts at /dev/pts. Idempotent. */
+ * real fs root, and mount devpts at /dev/pts. This startup-only entry point
+ * must run after ish_ffi_become_init and before ish_ffi_task_start. */
 int ish_ffi_create_devices(void);
-
-/* Same, but for a chrooted VM subtree. vm_root is a guest-absolute
- * path (e.g. "/srv/vms/playground"). Creates dev nodes under
- * <vm_root>/dev/ and mounts devpts at <vm_root>/dev/pts. */
-int ish_ffi_setup_vm_root(const char *vm_root);
 
 /* execve the supervisor as PID1. argv_packed and envp_packed are
  * NUL-separated, NUL-terminated buffers (i.e. "arg0\0arg1\0\0").
@@ -68,8 +65,11 @@ int ish_ffi_execve(const char *guest_path,
                    size_t argc, const char *argv_packed,
                    const char *envp_packed);
 
-/* Spawn the dedicated pthread that runs task_run_current(). */
+/* Spawn the dedicated, joinable pthread that runs task_run_current(). */
 int ish_ffi_task_start(void);
+
+/* Join the dedicated kernel pthread after the PID 1 exit callback fires. */
+int ish_ffi_task_join(void);
 
 /* Register a callback fired when PID1 exits. The callback is invoked
  * from the kernel pthread; do not block. */

@@ -353,18 +353,8 @@ int main(void) {
         return 1;
     }
 
-    /* Mount /proc, /dev, /dev/pts inside the codex VM tree. The
-     * provisioned rootfs must have been cloned into VM_ROOT by
-     * provision_codex.c already; if VM_ROOT does not exist on disk,
-     * setup_vm_root is harmless but spawn() will fail later. */
-    rc = ish_embed_setup_vm_root(inst, VM_ROOT);
-    if (rc != 0) {
-        fprintf(stderr, "setup_vm_root(%s) failed: %s\n",
-                VM_ROOT, ish_embed_strerror(rc));
-        ish_embed_shutdown(inst, 2000);
-        return 1;
-    }
-
+    /* The provisioner cloned VM_ROOT already. The first chrooted spawn below
+     * makes guest PID 1 prepare /proc, /dev and devpts automatically. */
     int fails = 0;
 
     if (case_codex_present(inst)) {
