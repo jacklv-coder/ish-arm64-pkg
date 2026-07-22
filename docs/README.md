@@ -62,6 +62,11 @@ fakefs RootFS (independently sourced and installed)
 Swift 对象不是另一套 runtime。它们包装 C handle；C 层管理线程、session 表、队列和
 协议；guest PID 1 管理 Linux child、PTY、信号与回收；fakefs 持久化 guest 文件系统。
 
+`third_party/ish` 是固定到精确 revision 的项目 fork，不是对别人上游工作树的直接修改。
+嵌入式生命周期和 JIT 一致性需要进入 iSH core，outer package 无法独立实现；fork 用
+独立 PR/CI 保存窄差异，通用修复仍可回馈上游。详见
+[架构文档](architecture.md#分层与职责)。
+
 ## Stage1 的关键不变量
 
 - 每个宿主进程只允许一次有效 instance lifecycle。
@@ -73,7 +78,12 @@ Swift 对象不是另一套 runtime。它们包装 C handle；C 层管理线程�
 - shutdown 只在所有 session 已关闭、spawn/runOneshot 等活动 instance 调用已退出后成功；
   Swift shutdown 失败保留 handle 供重试，成功后进入 consumed 终态并拒绝二次 boot。
 - host/supervisor wire 必须同为 v4，不做跨版本协商。
+- 默认 supervisor 安装前校验实际内嵌 bytes 的 SHA-256 与同一构建元数据/内容寻址路径；
+  自定义路径绕过该默认门禁。摘要一致不等于数字签名或来源认证。
+- JIT 单页写及显式 `invalidate_page` 按精确页过滤；仅多页哈希位图可能因碰撞保守多
+  失效。下一直链/RET 目标命中待处理代码脏页时才回到 dispatcher；纯数据写可继续直链。
 - RootFS 不属于 package/release，禁止将其混入 Corresponding Source。
+- 当前源码变更不携带 RootFS 或预构建二进制；XCFramework 必须由后续发布事务生成。
 
 ## 权威来源
 

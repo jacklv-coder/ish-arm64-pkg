@@ -64,9 +64,10 @@ git log --oneline --decorate -5 origin/main
 1. RootFS 参数必须是包含 `data/` 与 `meta.db` 的可写 fakefs 根目录，而不是 tar.gz、
    Alpine 目录或宿主 `/`。
 2. 检查 sandbox 权限、剩余空间、文件保护和路径生命周期。
-3. 默认 supervisor 路径依赖 release XCFramework 的内嵌 blob；自定义
-   `supervisorGuestPath` 会跳过内嵌安装，调用方必须保证 guest-absolute path、静态
-   AArch64 ELF、执行模式与 wire v4 匹配。
+3. 默认 supervisor 路径依赖 release XCFramework 的内嵌 blob；安装前会对实际 bytes
+   计算 SHA-256，并要求摘要与构建元数据及内容寻址 guest path 一致。自定义
+   `supervisorGuestPath` 会跳过内嵌安装和这项默认摘要校验，调用方必须保证
+   guest-absolute path、静态 AArch64 ELF、执行模式、完整性、来源与 wire v4 匹配。
 4. 保留 `kernelLogFD` 指向的日志。日志是 best-effort，不能替代返回码。
 
 若失败来自本地 `scripts/run-host-tests.sh`，先运行
@@ -85,6 +86,19 @@ git log --oneline --decorate -5 origin/main
 
 Stage1 Swift 公开错误仍是 `IshError.raw(code, message)`；不要按 Stage2 typed status 写
 排查逻辑。C 状态的权威列表见 [`include/ishembed.h`](../include/ishembed.h)。
+
+## `ISH_ERR_SUPERVISOR_INSTALL`
+
+默认路径只有在“实际内嵌 bytes 的 SHA-256、64 位小写构建摘要、
+`/sbin/.ishsv-ishembed-sha256-<digest>` 路径”三者一致后才调用安装 FFI。该错误通常说明
+blob 与生成的元数据来自不同构建、bytes 被改动，或复用了旧 build cache；应在隔离目录
+重建并运行 `scripts/verify-ios-artifact.sh`，不要手改摘要或内容寻址路径绕过失败。
+
+显式 `supervisorGuestPath` 本来就绕过默认 blob 安装与这项摘要门禁，不能把它当作修复
+默认资产不一致的捷径；选择自定义路径后，来源、签名、实际文件摘要、执行模式和 wire v4
+兼容性全部由调用方建立。默认 SHA-256 比对只证明 bytes 与同一次构建的固定元数据一致，
+不是数字签名，也不认证下载来源或发布者。本源码 PR 不携带 RootFS 或预构建 binary；测试
+本地二进制必须由当前检出构建，正式二进制只能来自通过门禁的后续 Release。
 
 ## `fs-codex` provision 或 `--verify` 失败
 
@@ -110,6 +124,21 @@ host 与 supervisor 必须精确使用 wire v4。常见原因：
 
 优先使用 XCFramework 内嵌 supervisor 的默认路径，并从同一次干净构建取得两端。
 公开 C ABI 1 与内部 wire v4 同时出现是正常的，不要把 ABI 常量改成 4 来“修复”握手。
+
+## 固定新 iSH 后，旧 e2e 变慢或超时
+
+先区分“持续有包安装/编译进度但超过时间预算”和“完全无进度的死锁”。JIT 一致性修复让
+直链/RET cache 在下一目标命中待处理代码脏页时返回 dispatcher，排空脏页并断开受影响的
+chaining/cache；纯数据写可继续直链，但每次链跳仍有检查成本。写密集的旧 Alpine e2e
+仍可能明显变慢。
+
+最新精确页修复只缩小失效范围：未发生切页的单页写和显式
+`asbestos_invalidate_page` 会精确比较 block 页，跨页 block 的第二页使用 `end_addr`；只有
+发生页面切换后的多页哈希位图可能因桶碰撞保守多失效。因此，单页碰撞测试通过能证明
+“没有误杀远端同桶 block”，不能证明普通写不再返回 dispatcher，也不能据此声称吞吐已
+完全恢复；代码页相交仍必须返回 dispatcher。复现时保留完整进度日志，运行测试文档中的
+`dirty-page-trace`/`dirty_page_test` 与
+性能基线；不要通过关闭失效、恢复直链或无限延长 CI timeout 掩盖正确性/性能问题。
 
 ## Spawn/chroot 失败
 

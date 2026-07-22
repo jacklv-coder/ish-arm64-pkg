@@ -9,8 +9,9 @@ iOS 18 二进制、内部 wire v4 和发布供应链处于同一可解释状态�
 
 | 层 | 主要门禁 | 证明内容 | 不证明什么 |
 | --- | --- | --- | --- |
-| 协议单元 | `proto_test`、`supervisor_stdin_test` | v4 帧解析、边界、stdin partial write/反压 | 真正 iSH boot |
-| 生命周期 | `lifecycle_test` | retain/release、close/read/write/signal 交错、shutdown/busy、PID identity | Stage2 Swift borrow 已完成 |
+| 协议/摘要单元 | `proto_test`、`supervisor_stdin_test`、`sha256_test` | v4 帧解析、边界、stdin partial write/反压、SHA-256 标准向量与畸形元数据拒绝 | 真正 iSH boot |
+| 生命周期 | `lifecycle_test` | retain/release、close/read/write/signal 交错、shutdown/busy、PID identity、错误内嵌摘要/路径在安装前失败 | Stage2 Swift borrow 已完成 |
+| JIT 脏页 | `dirty_page_test`、`dirty-page-trace` | READ 不置位、fast/miss/cross-page 写合并、单页碰撞精确过滤、显式跨页 `end_addr` 失效、多页保守桶、host/kernel 后置失效、精确 tracer、跨 TLB `IC IVAU` 与 ARM64/x86 直链边界 | 非规范的无 cache-maintenance 自修改代码立即可见；x86 跨线程全局发布；原写路径吞吐 |
 | native 集成 | `procfs_test`、`ishembed_smoke`、`codex_test` | fakefs、spawn、procfs、命令链路 | RootFS 来源/许可可信 |
 | sanitizer | ASan/UBSan，必要时 TSan | 已覆盖路径上的越界、UAF、未定义行为和数据竞争 | 所有调度组合都无缺陷 |
 | Swift RootFS-free | instance/session gate、shutdown retry、公开 API smoke | oneshot/session lease 阻止旧 ABI UAF、失败保留 handle、旧公开签名可编译 | 任意 C 调用都可取消或 close 始终有界 |
@@ -63,8 +64,14 @@ swift package dump-package >/dev/null
 标准构建：
 
 ```sh
+meson setup build-test-ish "$PWD/third_party/ish" \
+  -Dguest_arch=arm64 \
+  -Dc_args=-DISH_DISABLE_SKIP_BRK=1 \
+  -Db_lundef=false
+ninja -C build-test-ish libish.a libish_emu.a libfakefs.a
 meson setup build-test \
   -Dish_src="$PWD/third_party/ish" \
+  -Dish_build="$PWD/build-test-ish" \
   -Dguest_arch=arm64 \
   -Db_lundef=false \
   -Dwerror=true
@@ -85,19 +92,62 @@ meson test -C build-test --print-errorlogs
   `/proc` 扫描/清理失败会 fail-close，且不得发送成功 `EXITED`/shutdown ACK；
 - TTY foreground group 的 close 清理与 slot 释放；
 - `ish_embed_boot(..., NULL)` 无副作用拒绝；
+- 默认 supervisor 会在安装前对实际内嵌 bytes 计算 SHA-256，并同时绑定 64 位小写摘要和
+  `/sbin/.ishsv-ishembed-sha256-<digest>` 路径；错误摘要/路径均在调用安装 FFI 前以
+  `ISH_ERR_SUPERVISOR_INSTALL` 失败。显式自定义路径不走默认 blob 安装/摘要校验；这些
+  测试证明构建内一致性，不证明数字签名或来源认证；
 - shutdown 在 live session/active call 时返回 busy，正常路径 soft-halt 并 join；
 - control queue 的普通/关键 frame/byte 上限、饱和时 close/有限 oneshot 的有界 EOF fallback、
   stop/finish 精确释放，以及阻塞 reader 下 spawn staging gate；测试使用较小预算让溢出与
   复用路径可确定复现；
 - stdin queue partial write、`EAGAIN`、上限和错误传播；
+- TLB READ 不污染脏集合，C fast/write-miss/cross-page 写保留所有页，并验证当前末页延迟
+  到 drain、切页时保留前页；单页同桶碰撞回归证明写入无代码的碰撞页不会删除远端 block
+  或推进 generation，而写入真实代码页只失效一次；显式 `asbestos_invalidate_page` 回归
+  证明跨页 block 的第二页通过 `end_addr` 命中，同时同桶远端 block 保留。发生切页后的
+  多页路径使用哈希位图，两个不同桶及同桶碰撞可以保守批量失效，消费后不会重复推进
+  generation；确定性线程回归证明 drain 会等待持有
+  同一锁的 compile/insert，并在其发布后失效 stale block；`mem_did_write` 回归覆盖 pre/write
+  窗口后发布、跨页、地址回绕全量兜底和 data-only 空 occupancy；x86 精确 tracer 回归还证明
+  运行时集合 drain 后诊断页仍完整保留、相差 1024 页的同桶地址可分别枚举、重复遍历不消费
+  且只有显式成功路径才清理；模拟 `CTR_EL0` 的 DIC/IDC 均为 0，ARM64 真实 gadget 回归使用
+  独立 writer/executor TLB，证明 `IC IVAU, Xt` 先发布
+  Xt 页、再结束当前翻译块，使 dispatcher 在直链目标运行前排空脏集合；x86 真实 gadget
+  回归建立 `writer -> source -> target` 双直链并证明写后不会执行旧 target，另有 16-prefix
+  页尾回归证明 decoder 在第 16 byte 的 unmapped-page 读取前生成 `#UD`；ARM64 高地址相邻页
+  TLB 别名回归证明页尾最后一条对齐 A64 指令正常运行，而未对齐 PC 直接报错且不会预取、
+  驱逐起始页；
 - chroot Codex 配置保留自定义内容并修正为 `0600`、删除后重建默认值，以及不覆盖
   symlink、目录和 FIFO 等恶意类型。
+
+## JIT 性能基线
+
+在 Apple M3 Pro、release/O3/NDEBUG、Alpine 3.19.1 ARM64 seed 上，以 `d9629015` 为基线，
+对每个 oneshot 执行 20,000 次 shell 算术/变量写循环，并按 baseline/current 反向交错采样：
+
+- 单任务中位数 `2.6798s -> 2.8044s`，增加 `4.65%`；
+- 4 个同时放行的并发任务中位数 `2.9490s -> 3.0594s`，增加 `3.74%`；
+- `ishembed_smoke` 两侧共 20 次全部通过，固定等待造成的波动较大，不用于声称吞吐提升。
+
+后续目标页 guard 样本在同一机器上测得 shell 循环约 `2.77s -> 3.44s`（约 `24%`），
+legacy SSE2 e2e 约 `5.67s -> 7.08s`（约 `25%`）。这些是本地短样本，不替代稳定基准、
+PocketRoot 交互负载评估或发布 SLA。最终实现不会让所有普通写一律回到 dispatcher：只有
+下一直链/RET 目标与待处理代码脏页相交时才退出并排空，纯数据写可继续直链；但每次链跳
+仍有一致性检查成本。后续修改应复用相同 seed、release 配置和交错顺序，并增加多轮统计，
+避免把系统负载误判为代码变化。
 
 ## Sanitizer
 
 ```sh
+meson setup build-asan-ish "$PWD/third_party/ish" \
+  -Dguest_arch=arm64 \
+  -Dc_args=-DISH_DISABLE_SKIP_BRK=1 \
+  -Db_sanitize=address,undefined \
+  -Db_lundef=false
+ninja -C build-asan-ish libish.a libish_emu.a libfakefs.a
 meson setup build-asan \
   -Dish_src="$PWD/third_party/ish" \
+  -Dish_build="$PWD/build-asan-ish" \
   -Dguest_arch=arm64 \
   -Db_sanitize=address,undefined \
   -Db_lundef=false \
@@ -106,9 +156,12 @@ meson compile -C build-asan
 meson test -C build-asan --print-errorlogs --repeat 5
 ```
 
-CI 还会在独立 `build-ci-tsan` 目录用 `-Db_sanitize=thread` 执行同一套测试。不要在同一
-build 目录切换 sanitizer；Meson cache 和不同 runtime 混用会使结果不可解释。失败时保存
-完整 test log 和第一个 sanitizer stack。
+outer build 传入可用的 `-Dish_build` 后会生成 `dirty_page_test`；Meson 本身不证明该目录
+与 outer build 使用相同 sanitizer。上面的标准命令和 CI 会为 iSH/outer 显式使用相同配置，
+并另用 `build-ci-ish-tsan`、`build-ci-tsan` 目录以 `-Db_sanitize=thread` 执行同一套测试。
+不要在同一 build 目录切换 sanitizer，也不要把不同 sanitizer 的 iSH 与 outer build 混用；
+Meson cache 和不同 runtime 混用会使结果不可解释。失败时保存完整 test log 和第一个
+sanitizer stack。
 
 ## Host/RootFS 集成
 

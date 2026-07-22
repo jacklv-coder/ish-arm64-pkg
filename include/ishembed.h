@@ -110,11 +110,14 @@ typedef enum {
 typedef struct ish_embed_boot_opts {
     const char *rootfs_path;            /* writable host path to fakefs root (the dir with data/ + meta.db) */
     const char *workdir;                /* guest cwd for PID1 (e.g. "/")                                  */
-    /* In a release XCFramework, NULL atomically installs the bundled PID 1 at
-     * its private content-addressed SHA-256 path, verifies its complete bytes
-     * and mode, and does not replace a RootFS-owned /sbin/ishsv. Source builds
-     * without a bundled blob retain /sbin/ishsv as a compatibility fallback.
-     * A non-NULL override is executed as-is and skips bundled installation. */
+    /* In a release XCFramework, NULL verifies the SHA-256 of the actual
+     * embedded PID 1 bytes against generated metadata before atomically
+     * installing them at a private content-addressed path. It also verifies
+     * the installed bytes and mode, and does not replace a RootFS-owned
+     * /sbin/ishsv. SHA-256 here is an integrity check, not a signature or
+     * authentication of source/provenance. Source builds without a bundled
+     * blob retain /sbin/ishsv as a compatibility fallback. A non-NULL
+     * override is executed as-is and skips bundled installation. */
     const char *supervisor_guest_path;
     /* Optional best-effort supervisor/kernel log sink. The runtime duplicates
      * this descriptor during boot, never takes ownership of the caller's fd,

@@ -40,6 +40,8 @@ enum fake_mode {
     FAKE_PROTOCOL_FATAL_CONTROL_PRESSURE,
     FAKE_BAD_HELLO_ACK,
     FAKE_INSTALL_FAILURE,
+    FAKE_BUNDLED_DIGEST_MISMATCH,
+    FAKE_BUNDLED_PATH_MISMATCH,
     FAKE_CUSTOM_SUPERVISOR,
     FAKE_STDIN_CLOSE_ORDER,
     FAKE_CONTROL_FRAME_LIMIT,
@@ -71,9 +73,9 @@ const uint8_t ish_embed_bundled_supervisor[] = {0x7f, 'E', 'L', 'F'};
 const size_t ish_embed_bundled_supervisor_len =
     sizeof(ish_embed_bundled_supervisor);
 const char ish_embed_bundled_supervisor_sha256[] =
-    "0000000000000000000000000000000000000000000000000000000000000000";
+    "3bdbb4fe8397cd2b842430b39ccff01a8663c751945ef5e9a09e267fb8b1d359";
 const char ish_embed_bundled_supervisor_guest_path[] =
-    "/sbin/.ishsv-ishembed-sha256-0000000000000000000000000000000000000000000000000000000000000000";
+    "/sbin/.ishsv-ishembed-sha256-3bdbb4fe8397cd2b842430b39ccff01a8663c751945ef5e9a09e267fb8b1d359";
 
 static enum fake_mode g_mode;
 static atomic_int g_control_r = -1;
@@ -641,6 +643,18 @@ void ish_embed_test_oneshot_lifecycle_result(uint8_t type, int rc) {
     pthread_mutex_unlock(&g_fake_lock);
 }
 
+void ish_embed_test_bundled_supervisor_metadata(const char **sha256,
+                                                const char **guest_path) {
+    static const char bad_sha256[] =
+        "0000000000000000000000000000000000000000000000000000000000000000";
+    static const char bad_guest_path[] =
+        "/sbin/.ishsv-ishembed-sha256-0000000000000000000000000000000000000000000000000000000000000000";
+    if (g_mode == FAKE_BUNDLED_DIGEST_MISMATCH)
+        *sha256 = bad_sha256;
+    else if (g_mode == FAKE_BUNDLED_PATH_MISMATCH)
+        *guest_path = bad_guest_path;
+}
+
 void ish_embed_test_control_usage(ish_embed_instance_t *inst,
                                   size_t *out_bytes, size_t *out_frames);
 
@@ -804,6 +818,26 @@ static int test_install_failure(void) {
         return 1;
     }
     fprintf(stderr, "supervisor install failure mapped: OK\n");
+    return 0;
+}
+
+static int test_bundled_supervisor_metadata_mismatch(enum fake_mode mode,
+                                                     const char *label) {
+    g_mode = mode;
+    ish_embed_boot_opts_t opts = {0};
+    opts.rootfs_path = "/fake/rootfs";
+    opts.workdir = "/";
+    opts.kernel_log_fd = -1;
+    ish_embed_instance_t *inst = NULL;
+    int rc = ish_embed_boot(&opts, &inst);
+    if (rc != ISH_ERR_SUPERVISOR_INSTALL || inst != NULL ||
+        g_install_count != 0 || g_exec_path[0] != '\0') {
+        fprintf(stderr,
+                "%s: rc=%d inst=%p installs=%d exec=%s\n",
+                label, rc, (void *)inst, g_install_count, g_exec_path);
+        return 1;
+    }
+    fprintf(stderr, "%s rejected before install: OK\n", label);
     return 0;
 }
 
@@ -2741,12 +2775,18 @@ int main(int argc, char **argv) {
         return 2;
     }
     if (argc != 2) {
-        fprintf(stderr, "usage: %s boot-timeout|bad-hello-ack|install-failure|custom-supervisor|boot-null-output|stdin-close-order|control-frame-limit|control-critical-close|control-same-session-close|control-exited-same-session-close|control-critical-oneshot|control-preblocked-oneshot|control-byte-limit|control-byte-reserve|control-spawn-gate|control-oneshot-spawn-lock|supervisor-error|close-race|backlog|frame-backlog|backlog-control-pressure|borrow-shutdown|double-shutdown|active-call|broken-control|protocol-fatal|protocol-fatal-control-pressure|malformed-event TYPE|output-allocation-failure|spawn-argument-bound|shutdown-drain|log-backpressure|oneshot-timeout|oneshot-output\n", argv[0]);
+        fprintf(stderr, "usage: %s boot-timeout|bad-hello-ack|install-failure|bundled-supervisor-digest-mismatch|bundled-supervisor-path-mismatch|custom-supervisor|boot-null-output|stdin-close-order|control-frame-limit|control-critical-close|control-same-session-close|control-exited-same-session-close|control-critical-oneshot|control-preblocked-oneshot|control-byte-limit|control-byte-reserve|control-spawn-gate|control-oneshot-spawn-lock|supervisor-error|close-race|backlog|frame-backlog|backlog-control-pressure|borrow-shutdown|double-shutdown|active-call|broken-control|protocol-fatal|protocol-fatal-control-pressure|malformed-event TYPE|output-allocation-failure|spawn-argument-bound|shutdown-drain|log-backpressure|oneshot-timeout|oneshot-output\n", argv[0]);
         return 2;
     }
     if (strcmp(argv[1], "boot-timeout") == 0) return test_boot_timeout_cleanup();
     if (strcmp(argv[1], "bad-hello-ack") == 0) return test_bad_hello_ack();
     if (strcmp(argv[1], "install-failure") == 0) return test_install_failure();
+    if (strcmp(argv[1], "bundled-supervisor-digest-mismatch") == 0)
+        return test_bundled_supervisor_metadata_mismatch(
+            FAKE_BUNDLED_DIGEST_MISMATCH, "bundled supervisor digest mismatch");
+    if (strcmp(argv[1], "bundled-supervisor-path-mismatch") == 0)
+        return test_bundled_supervisor_metadata_mismatch(
+            FAKE_BUNDLED_PATH_MISMATCH, "bundled supervisor path mismatch");
     if (strcmp(argv[1], "custom-supervisor") == 0) return test_custom_supervisor_path();
     if (strcmp(argv[1], "boot-null-output") == 0) return test_boot_requires_output_handle();
     if (strcmp(argv[1], "stdin-close-order") == 0) return test_stdin_close_order();

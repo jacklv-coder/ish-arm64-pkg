@@ -45,11 +45,29 @@ RootFS 不提交到本仓库、不包含在 XCFramework 或 GitHub Release 中�
   4 MiB/256 帧总预算，其中 4 KiB/16 帧保留给 close/shutdown 等关键生命周期消息；普通
   调用无法接纳下一帧时返回 `ISH_ERR_CONTROL_LIMIT`。业务层仍应设置更严格的输出配额、
   超时与取消策略。
-- 发布 XCFramework 内嵌静态 AArch64 guest supervisor。默认 boot 会把它安装到 fakefs
-  内的内容寻址私有路径；显式 `supervisorGuestPath` 则由调用方负责来源与协议兼容性。
+- 发布 XCFramework 内嵌静态 AArch64 guest supervisor。默认 boot 会先对**实际内嵌
+  bytes** 计算 SHA-256，与同一构建生成的摘要及内容寻址 guest path 一致后，才安装到
+  fakefs；不匹配会以 `ISH_ERR_SUPERVISOR_INSTALL` 失败。显式 `supervisorGuestPath` 会
+  绕过默认 blob 的安装与这项摘要门禁，由调用方负责来源、完整性和协议兼容性。该摘要
+  比对不是数字签名，也不认证下载来源或发布者身份。
+- 固定的 iSH fork 对 JIT 写路径采用正确性优先的一致性：单页写和显式
+  `asbestos_invalidate_page` 按精确页过滤，跨页 block 的第二页按 `end_addr` 判断；只有
+  多页脏集合的哈希位图可能因碰撞保守地多失效。直链/RET cache 会在下一目标 block 与
+  待处理代码脏页相交时回到 dispatcher；纯数据写可继续直链，但仍保留待消费脏状态。
+  这避免了无关数据写一律打断直链，写密集路径仍有真实的一致性检查成本。
 - guest PID 1 不只清理 tracked process group；double-fork/`setsid` 后由 subreaper 收养的
   未跟踪后代也必须按精确 PID 清理并连续两次扫描为空，之后才发布成功退出。无法完成或
   证明清理时，整个 guest instance 会 fail-close，不会伪造成功的 `EXITED`/shutdown ACK。
+
+## 为什么维护 iSH fork
+
+`third_party/ish` 固定到本项目维护的 `ish-arm64` fork。join/soft-halt、嵌入式生命周期与
+JIT 脏页一致性必须修改模拟器核心，无法只在 outer package 或 Swift 层实现；fork 让这些
+窄差异拥有独立 PR、CI 和精确 gitlink，PocketRoot 的构建与发布也因此可复现。我们不会在
+本地直接改写别人维护的上游仓库；适合通用化的修复仍可回馈
+[iSH upstream](https://github.com/ish-app/ish)，但在上游接受并发布前由 fork 承担项目门禁。
+当前这组源码、测试和文档变更不纳入 RootFS，也不提交任何预构建 XCFramework/guest
+binary；二进制只能在后续发布事务通过后生成和发布。
 
 ## 安装状态
 

@@ -56,14 +56,40 @@ size, SHA-256, licenses, and installation transaction.
   cannot be admitted. Product code must still enforce tighter output, timeout,
   and cancellation policies.
 - A release XCFramework embeds a static AArch64 guest supervisor. Default boot
-  installs it at a content-addressed private fakefs path. A custom
-  `supervisorGuestPath` makes the caller responsible for provenance and protocol
-  compatibility.
+  first hashes the **actual embedded bytes** and installs them into fakefs only
+  when that SHA-256 matches same-build metadata and the content-addressed guest
+  path; a mismatch returns `ISH_ERR_SUPERVISOR_INSTALL`. An explicit
+  `supervisorGuestPath` bypasses the default blob installation and this digest
+  gate, making the caller responsible for provenance, integrity, and protocol
+  compatibility. This digest comparison is not a digital signature and does not
+  authenticate download provenance or publisher identity.
+- The pinned iSH fork gives correctness priority on JIT writes. Single-page
+  writes and explicit `asbestos_invalidate_page` filter by the exact page, with
+  a cross-page block's second page checked through `end_addr`; only the hashed
+  bitmap for a multi-page dirty set can conservatively over-invalidate on a
+  collision. Direct chains and the RET cache return to the dispatcher when the
+  next target block intersects pending dirty code pages. Data-only writes may
+  continue chaining while retaining pending dirty state, avoiding an
+  unconditional chain break while preserving a real coherence-checking cost.
 - Guest PID 1 cleans more than the tracked process group. Untracked descendants
   adopted by the subreaper after a double fork/`setsid` must be removed by exact
   PID and followed by two consecutive clean scans before successful exit is
   published. If cleanup cannot be completed or proven, the whole guest instance
   fail-closes without a false-success `EXITED` or shutdown acknowledgement.
+
+## Why this project maintains an iSH fork
+
+`third_party/ish` pins the project's maintained `ish-arm64` fork. Join/soft-halt,
+embedded lifecycle, and JIT dirty-page coherence require changes in the emulator
+core and cannot be implemented only in the outer package or Swift layer. The fork
+gives those narrow differences independent PRs, CI, and an exact gitlink, making
+PocketRoot builds and releases reproducible. We do not directly rewrite somebody
+else's local upstream repository; generally useful fixes can still be contributed
+to [iSH upstream](https://github.com/ish-app/ish), while the fork carries project
+gates until upstream accepts and releases them. This source, test, and
+documentation change includes neither RootFS content nor any prebuilt
+XCFramework/guest binary; binaries may be produced and published only by a later
+release transaction after its gates pass.
 
 ## Installation status
 

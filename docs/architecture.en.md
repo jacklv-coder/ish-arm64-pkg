@@ -46,6 +46,109 @@ third_party/ish + fakefs RootFS       emulator/kernel state + persistence
 - RootFS supplies persistent fakefs content, is installed independently by the
   host, and is outside the Release.
 
+`third_party/ish` points to the project's maintained `ish-arm64` fork; this is
+not a local rewrite of somebody else's upstream checkout. Join/soft-halt,
+embedded lifecycle, and JIT dirty-page coherence require changes inside iSH
+core and cannot be completed by the outer FFI alone. PocketRoot builds, tests,
+and releases must also pin one reviewed exact revision. Generic fixes can still
+be prepared for upstream, but until upstream accepts and releases them, the fork
+keeps these narrow differences reviewable through independent PRs, CI, and the
+outer gitlink. It does not claim ownership of or replace the upstream project.
+
+## JIT self-modifying-code coherence
+
+iSH's ARM64 JIT can directly chain translated blocks, so guest writes cannot
+track only the last page: a cross-page store or several stores in one block can
+overwrite that slot and then continue into stale translation. Each TLB now owns
+a 1024-bit dirty-bucket set matching `FIBER_PAGE_HASH_SIZE`. C fast writes,
+write misses, cross-page writes, and ARM64/x86 gadget paths keep the current exact
+page in `dirty_page`; only a page transition ORs the prior page into the bitmap,
+At dispatcher drain, the final page keeps its exact identity and takes exact
+invalidation when there was no prior bucket; only after a page transition is the
+final page added to the bitmap for conservative multi-page batching. Consecutive
+same-page writes therefore avoid repeated bitmap work without losing exact
+identity, while arbitrary multi-page writes remain lossless. READ paths do not
+mark. These fields belong only to runtime invalidation and are cleared
+immediately after the dispatcher drains them.
+
+The x86 `ptraceomatic`/`unicornomatic` memory comparison cannot reuse those
+hashed buckets: addresses 1024 pages apart collide, and the runtime drain runs
+before the tools compare memory. The tools therefore opt into a separate exact
+20-bit page bitmap (128 KiB plus a 2 KiB second-level summary). Write paths record
+the full page number only on page transitions and drain records the final page.
+The diagnostic set survives runtime clearing until every page compares
+successfully; a mismatch leaves it intact for retry. Normal execution keeps the
+pointer `NULL` and allocates none of this diagnostic storage.
+
+Kernel/host code that modifies guest memory through
+`mem_ptr(..., MEM_WRITE*)` uses two invalidation edges. It invalidates before
+returning the writable pointer, then calls `mem_did_write` after the actual
+`memcpy`, atomic RMW, or `memset` while the same `mem->lock` read lifetime is
+still held. A compiler that publishes old bytes in that interval is therefore
+removed by the post-write edge. The normal path uses atomic occupancy so a
+data-only page does not contend on the global JIT mutex; oversized, out-of-range,
+or wrapping internal reports conservatively invalidate everything.
+
+On return to the dispatcher, the runtime checks dirty pages and moves matching
+blocks to jetsam while holding the same lock used for translation compile/insert,
+then uses `invalidate_gen` to clear block/return caches. A write run with no page
+transition still retains the final page's exact identity, so candidates are
+filtered by that exact page; explicit `asbestos_invalidate_page` uses the same
+filter. For a translated block spanning two pages, `page[0]` compares
+`block->addr` while `page[1]` must compare `block->end_addr`. Invalidating the
+second page therefore removes a real cross-page block without evicting a remote
+block that merely shares its hash bucket. Only a **multi-page** dirty set that
+has already transitioned pages folds earlier identities into the hashed bitmap
+and can conservatively over-invalidate because of a collision; it cannot miss a
+required invalidation.
+
+Bucket inspection, invalidation, and dirty-set clearing cannot trust an
+empty-bucket fast path outside the coherence lock: another thread could compile
+old bytes, wait to insert, and publish a stale block after that set clears. The
+implementation reads atomic occupancy with acquire semantics while holding the
+coherence read side, and may skip the global mutation mutex only when no code is
+a candidate. Before entering the next direct-chain or RET-cache target, assembly
+guards compare that block's `addr`/`end_addr` with the current exact dirty page
+and conservative buckets for earlier pages. An intersection returns to the
+dispatcher to drain dirty state and invalidate affected chaining/caches;
+data-only writes that do not intersect the target may keep chaining without
+losing pending state. This avoids an unconditional dispatcher exit, although
+each chained transfer still pays a coherence check and write-heavy legacy
+end-to-end workloads can remain materially slower. See the
+[testing guide](testing.en.md#jit-performance-baseline) for the measured baseline.
+
+A normal task holds the read side of `mem->lock` while running JIT code, whereas
+a lazy mapping may temporarily drop that read lock and acquire the write side.
+To avoid reversing this order against dirty draining and compilation, the
+compiler resolves every page the next instruction may read before acquiring the
+write side of `dirty_coherence_lock`. Decoder reads then switch to a no-fault TLB
+mode: a miss emits a guest fault instead of entering an MMU slow path that could
+upgrade `mem->lock`. The x86 decoder also emits `#UD` before reading any 16th
+instruction byte, while A64 rejects a non-4-byte-aligned PC before reading; a
+valid A64 instruction cannot straddle a 4 KiB page. Compilation is therefore
+serialized with draining from guest-byte read through block insertion without
+requesting an outer memory write lock under the inner coherence lock.
+
+Architecturally valid ARM64 self-modifying code performs a `DC ...`,
+`IC IVAU, Xt`, and barrier sequence after writing. Data-cache maintenance remains
+a NOP over the shared host bytes. `IC IVAU` publishes Xt's page into the TLB of
+the thread executing that IC, then ends the translated block and returns to the
+dispatcher. This covers the valid cross-thread sequence where writer and
+cache-maintenance executor use different TLBs. Dirty state is consumed before a
+modified target executes, even if that target was directly chained. Guest code
+that omits the required instruction-cache maintenance has no immediate visibility
+guarantee. The emulated `CTR_EL0 == 0x84448004` deliberately keeps
+DIC and IDC (bits 29 and 28) clear, so guest code cannot legally omit the DC/IC
+steps. Tests bind that constant and both bits to the `IC IVAU` decoder boundary.
+
+The PocketRoot Stage1 production artifact contains an **ARM64 guest only**. The
+x86 guest path remains a compatibility and regression build for the fork:
+same-thread writes check the next target at central block-chain and
+return-cache-chain boundaries and return to the dispatcher only when it
+intersects pending dirty code pages. This stage does not promise global
+publication for cross-thread x86 self-modification and does not package an x86
+guest slice in the PocketRoot XCFramework.
+
 ## Boot flow
 
 1. The host validates RootFS layout, provenance, and hash, then passes a writable
@@ -53,9 +156,14 @@ third_party/ish + fakefs RootFS       emulator/kernel state + persistence
 2. The C host creates protocol and log pipes and prepares instance state.
    `out_instance == NULL` is rejected before installation or thread side effects.
 3. Without `supervisor_guest_path`, a release XCFramework atomically installs
-   its embedded static AArch64 supervisor at a private content-addressed fakefs
-   path and verifies all bytes and executable mode. It does not replace a
-   RootFS-owned `/sbin/ishsv`. The caller owns any custom path.
+   its embedded static AArch64 supervisor only after hashing the actual bytes
+   and matching their SHA-256 build metadata. It uses a private content-addressed
+   fakefs path and verifies all bytes and executable mode. It does not replace a
+   RootFS-owned `/sbin/ishsv`. An explicit custom path bypasses this default blob
+   installation and digest gate and is entirely caller-owned. SHA-256 here proves
+   only that the actual bytes match fixed metadata from the same build; it is not
+   a digital signature and does not authenticate download provenance or publisher
+   identity.
 4. The iSH kernel starts on a joinable pthread and enters guest PID 1.
 5. Host and supervisor exchange `HELLO`/`HELLO_ACK`, exactly checking public ABI
    version 1 and wire protocol v4. Boot returns the instance only after success.

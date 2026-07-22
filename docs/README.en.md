@@ -68,6 +68,13 @@ Swift objects are not a second runtime. They wrap C handles. The C layer manages
 threads, session tables, queues, and framing. Guest PID 1 manages Linux children,
 PTYs, signals, and reaping. fakefs persists the guest filesystem.
 
+`third_party/ish` is the project fork pinned to an exact revision, not a direct
+edit of somebody else's upstream worktree. Embedded lifecycle and JIT coherence
+must enter iSH core and cannot be implemented by the outer package alone. The
+fork carries narrow differences through independent PRs and CI while generic
+fixes can still go upstream. See the
+[architecture guide](architecture.en.md#layers-and-responsibilities).
+
 ## Stage1 invariants
 
 - One valid instance lifecycle is supported per host process.
@@ -81,7 +88,17 @@ PTYs, signals, and reaping. fakefs persists the guest filesystem.
   such as spawn/runOneshot end. Failed Swift shutdown keeps the handle for
   retry; success enters a consumed terminal state and rejects another boot.
 - Host and supervisor must both use wire v4; there is no cross-version negotiation.
+- Before default supervisor installation, SHA-256 over the actual embedded bytes
+  must match same-build metadata and the content-addressed path. A custom path
+  bypasses that default gate. Digest equality is not a digital signature or
+  provenance authentication.
+- JIT single-page writes and explicit `invalidate_page` use exact-page filtering;
+  only a multi-page hashed bitmap can conservatively over-invalidate on collision.
+  A direct-chain or RET target returns to the dispatcher only when it intersects
+  pending dirty code pages; data-only writes may keep chaining.
 - RootFS is outside the package/Release and must not enter Corresponding Source.
+- The current source change carries no RootFS or prebuilt binary; a later release
+  transaction must produce the XCFramework.
 
 ## Authoritative sources
 

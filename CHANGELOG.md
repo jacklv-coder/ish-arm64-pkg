@@ -14,7 +14,8 @@
   XCFramework 的 URL/checksum；这是刻意保留的可验证状态。
 - `scripts/release.sh v0.4.0-abi.1` 只有在新 XCFramework、对应源码、iOS 18 真链接和
   发布事务门禁全部通过后，才生成只更新 manifest 的 release commit。
-- RootFS 不提交、不打包，也不由 release 脚本上传。
+- RootFS 不提交、不打包，也不由 release 脚本上传；当前 PR 同样不提交预构建
+  XCFramework 或 guest binary，二进制只由后续发布事务生成。
 
 ### Stage1 已交付：native runtime
 
@@ -30,6 +31,16 @@
   暂存大块内存。
 - 内部 host ↔ guest wire protocol 升级为精确匹配 v4，并增加 `SESSION_CLOSE`；
   wire v4 与公开 C ABI 1 是两个不同版本面。
+- 默认 boot 在安装内嵌 supervisor 前，对实际 blob bytes 计算 SHA-256，并要求它与构建
+  摘要及 `/sbin/.ishsv-ishembed-sha256-<digest>` 内容寻址路径一致；不匹配在安装前返回
+  `ISH_ERR_SUPERVISOR_INSTALL`。显式 `supervisorGuestPath` 绕过默认 blob 安装与摘要门禁，
+  由调用方负责。该校验保证同一构建内的完整性，不是签名或来源/发布者认证。
+- iSH JIT 脏页 drain 与 compile/insert 串行，host/kernel 写使用前后失效，ARM64
+  `IC IVAU` 会发布目标页并退出直链。单页写与显式 `asbestos_invalidate_page` 现在按精确
+  页过滤；跨页 block 的第二页用 `end_addr` 判断，只有多页哈希位图可能因碰撞保守多
+  失效。新增单页碰撞和跨页 `end_addr` 回归。直链/RET cache 仅在下一目标 block 命中待处理
+  代码脏页时回到 dispatcher；纯数据写可以继续直链，但仍保留待消费脏状态和一致性检查
+  成本。
 - live TTY close 会清理 tracked shell、前台 job 与 transport；direct child 通过
   readiness pipe 确认不可迁移的 PID/PGID，退出后由 `waitid(..., WNOWAIT)` 保留
   identity、先清理同组后台进程，再由 `waitpid` 回收并清零 PID/PGID。PID 1 还会按精确
@@ -53,6 +64,9 @@
 - chrooted spawn 会重新验证必要的 device、devpts/procfs 与运行目录状态。
 - production 与 host-test iSH 构建显式定义 `ISH_DISABLE_SKIP_BRK=1`，不会启用 fork 中实验性
   arm64 BRK 恢复而吞掉 fatal guest SIGTRAP；旧 Meson cache 缺宏会被拒绝。
+- `third_party/ish` 固定项目维护的 `ish-arm64` fork：join/soft-halt、嵌入生命周期与 JIT
+  一致性必须修改 iSH core，无法仅在 outer package 完成。窄差异通过独立 PR/CI 和精确
+  gitlink 审计，通用修复仍可回馈上游；不会直接改写别人维护的上游工作树。
 - chroot 中缺失的 Codex 配置会原子创建默认值；已有普通文件保留自定义内容并收紧为
   `0600`，符号链接和其他非普通文件会被安全拒绝。
 

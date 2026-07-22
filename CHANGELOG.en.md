@@ -18,7 +18,8 @@ v0.4.0**.
   after the new XCFramework, Corresponding Source, iOS 18 real links, and the
   release-transaction gates all pass.
 - RootFS content is neither committed, packaged, nor uploaded by the release
-  script.
+  script. The current PR also commits no prebuilt XCFramework or guest binary;
+  a later release transaction alone produces binaries.
 
 ### Delivered in Stage1: native runtime
 
@@ -38,6 +39,23 @@ v0.4.0**.
   allocations outside that budget.
 - The internal host ↔ guest wire protocol is exact-match v4 and adds
   `SESSION_CLOSE`. Wire v4 and public C ABI 1 are separate version surfaces.
+- Before default boot installs the embedded supervisor, it hashes the actual
+  blob bytes and requires SHA-256 to match both build metadata and the
+  `/sbin/.ishsv-ishembed-sha256-<digest>` content-addressed path. A mismatch
+  returns `ISH_ERR_SUPERVISOR_INSTALL` before installation. An explicit
+  `supervisorGuestPath` bypasses the default blob installation and digest gate
+  and is caller-owned. This proves same-build integrity; it is not a signature
+  or provenance/publisher authentication.
+- iSH JIT dirty-page draining is serialized with compile/insert, host/kernel
+  writes use pre/post invalidation, and ARM64 `IC IVAU` publishes its target page
+  before leaving a direct chain. Single-page writes and explicit
+  `asbestos_invalidate_page` now filter by exact page; a cross-page block's second
+  page uses `end_addr`, and only the multi-page hashed bitmap can conservatively
+  over-invalidate on collision. New regressions cover a single-page collision and
+  cross-page `end_addr`. Direct chains and the RET cache return to the dispatcher
+  only when the next target block intersects pending dirty code pages. Data-only
+  writes may keep chaining while retaining pending dirty state and its coherence
+  checks.
 - Closing a live TTY cleans up the tracked shell, foreground job, and transports.
   A readiness pipe first validates an immutable PID/PGID; after leader exit,
   `waitid(..., WNOWAIT)` preserves that identity while same-group background
@@ -74,6 +92,11 @@ v0.4.0**.
 - Production and host-test iSH builds explicitly define
   `ISH_DISABLE_SKIP_BRK=1`, disabling the fork's experimental arm64 BRK recovery
   so fatal guest SIGTRAP is not swallowed; old Meson caches without it are rejected.
+- `third_party/ish` pins the project's maintained `ish-arm64` fork: join/soft-halt,
+  embedded lifecycle, and JIT coherence require iSH-core changes that the outer
+  package cannot provide alone. Independent PRs/CI and an exact gitlink audit
+  these narrow differences while generic fixes can still go upstream; the
+  project does not directly rewrite somebody else's maintained upstream worktree.
 - A missing chroot Codex configuration is created atomically; an existing
   regular file preserves custom contents while tightening its mode to `0600`,
   and symlinks or other non-regular objects are rejected safely.

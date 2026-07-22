@@ -41,6 +41,7 @@
 #include <unistd.h>
 
 #include "ishembed.h"
+#include "ishembed_sha256.h"
 #include "../protocol/proto.h"
 #include "../ffi/ish_ffi.h"
 
@@ -1207,16 +1208,29 @@ int ish_embed_boot(const ish_embed_boot_opts_t *opts,
     const char *sup = opts->supervisor_guest_path;
     if (!sup) {
 #ifdef ISH_EMBED_BUNDLED_SUPERVISOR
-        if (strlen(ish_embed_bundled_supervisor_sha256) != 64 ||
+        const char *bundled_sha256 = ish_embed_bundled_supervisor_sha256;
+        const char *bundled_guest_path =
+            ish_embed_bundled_supervisor_guest_path;
+#ifdef ISH_EMBED_TESTING
+        extern void ish_embed_test_bundled_supervisor_metadata(
+            const char **sha256, const char **guest_path);
+        ish_embed_test_bundled_supervisor_metadata(
+            &bundled_sha256, &bundled_guest_path);
+#endif
+        if (!ish_embed_supervisor_metadata_valid(
+                ish_embed_bundled_supervisor,
+                ish_embed_bundled_supervisor_len,
+                bundled_sha256,
+                bundled_guest_path) ||
             ish_ffi_install_executable(
-                ish_embed_bundled_supervisor_guest_path,
+                bundled_guest_path,
                 ish_embed_bundled_supervisor,
                 ish_embed_bundled_supervisor_len,
                 0755) < 0) {
             err = ISH_ERR_SUPERVISOR_INSTALL;
             goto fail;
         }
-        sup = ish_embed_bundled_supervisor_guest_path;
+        sup = bundled_guest_path;
 #else
         sup = ISH_DEFAULT_SUPERVISOR_PATH;
 #endif

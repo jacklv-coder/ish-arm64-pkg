@@ -4,9 +4,9 @@
 # 1. Audits or safely rebuilds $REPO/build/fs from its input identity.
 # 2. Ensures $REPO/build-check (iSH static libs) exists.
 # 3. Configures $REPO/build-host (embed + tests) if missing.
-# 4. Builds all host-test binaries and provisions fs-codex on demand.
-# 5. Runs requested procfs/smoke stages against the clean RootFS and
-#    codex_test against the provisioned one.
+# 4. Builds and runs the deterministic JIT dirty-page regression.
+# 5. Provisions fs-codex on demand and runs requested procfs/smoke stages.
+# 6. Runs codex_test against the provisioned RootFS.
 #
 # Flags:
 #   --no-codex     skip codex provisioning + codex_test (fast loop for
@@ -35,6 +35,7 @@ want_codex=1
 want_smoke=0
 force_provision=0
 procfs_rc=0
+dirty_page_rc=0
 smoke_rc=0
 provision_rc=0
 codex_rc=0
@@ -604,7 +605,15 @@ fi
 echo "[host-tests] building host-tests"
 ninja -C "$embed_build" 8>&- 9>&-
 
-# ---- 4. procfs / smoke (no codex needed) -------------------------------
+# ---- 4. deterministic JIT coherence -----------------------------------
+
+echo
+echo "================================================================"
+echo "= dirty_page_test"
+echo "================================================================"
+"$embed_build/dirty_page_test" 8>&- 9>&- || dirty_page_rc=$?
+
+# ---- 5. procfs / smoke (no codex needed) -------------------------------
 
 echo
 echo "================================================================"
@@ -622,7 +631,7 @@ if [[ $want_smoke -eq 1 ]]; then
         8>&- 9>&- || smoke_rc=$?
 fi
 
-# ---- 5. codex ----------------------------------------------------------
+# ---- 6. codex ----------------------------------------------------------
 
 if [[ $want_codex -eq 1 ]]; then
     if [[ $force_provision -eq 1 ]]; then export FORCE=1; fi
@@ -659,6 +668,7 @@ echo
 echo "================================================================"
 echo "= summary"
 echo "================================================================"
+echo "dirty pages : $dirty_page_rc"
 echo "procfs_test : $procfs_rc"
 [[ $want_smoke -eq 1 ]] && echo "smoke       : $smoke_rc"
 if [[ $want_codex -eq 1 ]]; then
@@ -673,7 +683,10 @@ fi
 # Preserve the first non-zero status while still running every requested stage
 # whose prerequisites succeeded. A zero exit therefore proves that every stage
 # named by this invocation passed, rather than only procfs_test.
-suite_rc=$procfs_rc
+suite_rc=$dirty_page_rc
+if [[ $suite_rc -eq 0 && $procfs_rc -ne 0 ]]; then
+    suite_rc=$procfs_rc
+fi
 if [[ $want_smoke -eq 1 && $suite_rc -eq 0 && $smoke_rc -ne 0 ]]; then
     suite_rc=$smoke_rc
 fi

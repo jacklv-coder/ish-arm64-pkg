@@ -70,8 +70,11 @@ Check each layer:
    `meta.db`, not a tar.gz, Alpine directory, or host `/`.
 2. Check sandbox permission, free space, file protection, and path lifetime.
 3. The default supervisor path uses the release XCFramework's embedded blob.
-   A custom `supervisorGuestPath` skips embedded installation; the caller must
-   supply a guest-absolute static AArch64 ELF with executable mode and wire v4.
+   Before installation, SHA-256 over the actual bytes must match build metadata
+   and the content-addressed guest path. A custom `supervisorGuestPath` skips
+   embedded installation and this default digest check; the caller must supply
+   a guest-absolute static AArch64 ELF with valid mode, integrity, provenance,
+   and wire v4 compatibility.
 4. Preserve output sent to `kernelLogFD`. Logs are best-effort and do not replace
    the return code.
 
@@ -99,6 +102,26 @@ a Release.
 Stage1 Swift still exposes `IshError.raw(code, message)`; do not write diagnosis
 against Stage2 typed statuses. [`include/ishembed.h`](../include/ishembed.h) is
 authoritative for C status codes.
+
+## `ISH_ERR_SUPERVISOR_INSTALL`
+
+The default path calls the installation FFI only after three values agree: the
+SHA-256 of the actual embedded bytes, 64-character lowercase build metadata,
+and `/sbin/.ishsv-ishembed-sha256-<digest>`. This error usually means the blob
+and generated metadata came from different builds, bytes changed, or an old
+build cache was reused. Rebuild in an isolated directory and run
+`scripts/verify-ios-artifact.sh`; do not hand-edit the digest or
+content-addressed path to bypass the failure.
+
+An explicit `supervisorGuestPath` already bypasses the default blob installation
+and digest gate and is not a shortcut for repairing an inconsistent default
+asset. With a custom path, the caller must establish provenance, signatures,
+the actual file digest, executable mode, and wire v4 compatibility. Default
+SHA-256 comparison proves only that bytes match fixed metadata from the same
+build; it is not a digital signature and does not authenticate download origin
+or publisher. This source PR carries neither RootFS content nor a prebuilt
+binary. Build local test binaries from the current checkout; production binaries
+must come from a later Release whose gates passed.
 
 ## `fs-codex` provision or `--verify` failure
 
@@ -128,6 +151,29 @@ Host and supervisor must use exact-match wire v4. Common causes:
 Prefer the XCFramework's embedded supervisor and obtain both peers from one
 clean build. Public C ABI 1 and internal wire v4 appearing together is correct;
 do not change the ABI constant to 4 to “fix” the handshake.
+
+## Legacy e2e becomes slow or times out after pinning the new iSH
+
+First distinguish “package installation/compilation keeps making progress but
+exceeds the time budget” from a deadlock with no progress. JIT coherence returns
+from a direct chain or RET cache when the next target intersects pending dirty
+code pages, then drains dirty pages and disconnects affected chaining/caches.
+Data-only writes may keep chaining, but every chained transfer still pays a
+check, and write-heavy legacy Alpine end-to-end tests can remain materially
+slower.
+
+The latest exact-page fix only narrows the invalidation set. A single-page run
+with no transition and explicit `asbestos_invalidate_page` compare exact block
+pages; a cross-page block's second page uses `end_addr`. Only the multi-page
+hashed bitmap after a page transition can conservatively over-invalidate on a
+bucket collision. Passing the single-page collision regression therefore proves
+that a remote same-bucket block survives; it does not prove that ordinary writes
+never return to the dispatcher or that old throughput has been restored; a code
+page intersection must still return.
+Preserve complete progress logs and run the testing guide's
+`dirty-page-trace`/`dirty_page_test` plus the performance baseline. Do not hide a
+correctness or performance problem by disabling invalidation, restoring unsafe
+direct chains, or extending CI timeouts without bound.
 
 ## Spawn/chroot failure
 

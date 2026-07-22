@@ -57,10 +57,21 @@ jobs:
       - name: Link and test Swift API against the published manifest binary
         run: scripts/test-swift-ios.sh --manifest-binary
 
-      - name: Run deterministic lifecycle tests with sanitizers
+      - name: Run deterministic native and JIT tests with sanitizers
         run: |
+          meson setup build-ci-ish "$PWD/third_party/ish" \
+            -Dguest_arch=arm64 \
+            -Dc_args=-DISH_DISABLE_SKIP_BRK=1 \
+            -Db_sanitize=address,undefined \
+            -Db_lundef=false
+          # The chain executable already depends on libish + libish_emu; fakefs
+          # is the only additional archive consumed by the outer Meson build.
+          meson compile -C build-ci-ish dirty-page-chain-test fakefs
+          meson test -C build-ci-ish --print-errorlogs --repeat 5 \
+            dirty-page-chain
           meson setup build-ci \
             -Dish_src="$PWD/third_party/ish" \
+            -Dish_build="$PWD/build-ci-ish" \
             -Dguest_arch=arm64 \
             -Db_sanitize=address,undefined \
             -Db_lundef=false \
@@ -68,10 +79,29 @@ jobs:
           meson compile -C build-ci
           meson test -C build-ci --print-errorlogs --repeat 5
 
+      - name: Gate exact x86 dirty-page tracing
+        run: |
+          meson setup build-ci-ish-x86 "$PWD/third_party/ish" \
+            -Dguest_arch=x86 \
+            -Db_sanitize=address,undefined \
+            -Db_lundef=false
+          meson compile -C build-ci-ish-x86 dirty-page-trace-test
+          meson test -C build-ci-ish-x86 --print-errorlogs --repeat 5 \
+            dirty-page-trace
+
       - name: Run deterministic lifecycle tests with ThreadSanitizer
         run: |
+          meson setup build-ci-ish-tsan "$PWD/third_party/ish" \
+            -Dguest_arch=arm64 \
+            -Dc_args=-DISH_DISABLE_SKIP_BRK=1 \
+            -Db_sanitize=thread \
+            -Db_lundef=false
+          meson compile -C build-ci-ish-tsan dirty-page-chain-test fakefs
+          meson test -C build-ci-ish-tsan --print-errorlogs \
+            dirty-page-chain
           meson setup build-ci-tsan \
             -Dish_src="$PWD/third_party/ish" \
+            -Dish_build="$PWD/build-ci-ish-tsan" \
             -Dguest_arch=arm64 \
             -Db_sanitize=thread \
             -Db_lundef=false \

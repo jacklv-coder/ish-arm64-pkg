@@ -60,7 +60,7 @@ libishffi = static_library('ishffi',
     install: false,
 )
 
-libishembed_sources = ['host/ishembed.c']
+libishembed_sources = ['host/ishembed.c', 'host/ishembed_sha256.c']
 libishembed_c_args = []
 supervisor_blob_src = get_option('supervisor_blob_src')
 if supervisor_blob_src != ''
@@ -128,6 +128,14 @@ if ish_build_dir != ''
             include_directories: [embed_includes],
             install: false,
         )
+        dirty_page_test = executable('dirty_page_test',
+            ['c-tests/dirty_page_test.c'],
+            dependencies: ish_test_deps,
+            include_directories: [embed_includes],
+            c_args: ish_cflags,
+            install: false,
+        )
+        test('dirty_page_invalidation', dirty_page_test, timeout: 10)
     endif
 endif
 
@@ -150,23 +158,43 @@ provision_codex_format_test = executable('provision_codex_format_test',
 )
 test('provision_codex_format', provision_codex_format_test)
 
-# Host-only deterministic lifecycle tests. The test file supplies a fake FFI
-# and supervisor pipe peer, so no iSH static libraries or RootFS are required.
-lifecycle_test = executable('lifecycle_test',
-    ['host/ishembed.c', 'c-tests/lifecycle_test.c'],
-    include_directories: [embed_includes],
-    dependencies: [threads],
-    c_args: [
-        '-DISH_EMBED_HELLO_TIMEOUT_MS=25',
-        '-DISH_EMBED_TESTING=1',
-        '-DISH_EMBED_BUNDLED_SUPERVISOR=1',
-        '-DISH_EMBED_MAX_CONTROL_QUEUE_BYTES=131072u',
-        '-DISH_EMBED_MAX_CONTROL_QUEUE_FRAMES=4u',
-        '-DISH_EMBED_CONTROL_CRITICAL_RESERVE_BYTES=16u',
-        '-DISH_EMBED_CONTROL_CRITICAL_RESERVE_FRAMES=1u',
-    ],
+# Dependency-free SHA-256 known-answer tests protect the runtime check applied
+# to the generated bundled-supervisor bytes before they enter fakefs.
+sha256_test = executable('sha256_test',
+    ['host/ishembed_sha256.c', 'c-tests/sha256_test.c'],
     install: false,
 )
+test('sha256_known_answers', sha256_test)
+
+# Host-only deterministic lifecycle tests. The test file supplies a fake FFI
+# and supervisor pipe peer, so no iSH static libraries or RootFS are required.
+lifecycle_test_sources = [
+    'host/ishembed.c',
+    'host/ishembed_sha256.c',
+    'c-tests/lifecycle_test.c',
+]
+lifecycle_test_c_args = [
+    '-DISH_EMBED_HELLO_TIMEOUT_MS=25',
+    '-DISH_EMBED_TESTING=1',
+    '-DISH_EMBED_BUNDLED_SUPERVISOR=1',
+    '-DISH_EMBED_MAX_CONTROL_QUEUE_BYTES=131072u',
+    '-DISH_EMBED_MAX_CONTROL_QUEUE_FRAMES=4u',
+    '-DISH_EMBED_CONTROL_CRITICAL_RESERVE_BYTES=16u',
+    '-DISH_EMBED_CONTROL_CRITICAL_RESERVE_FRAMES=1u',
+]
+lifecycle_test = executable('lifecycle_test',
+    lifecycle_test_sources,
+    include_directories: [embed_includes],
+    dependencies: [threads],
+    c_args: lifecycle_test_c_args,
+    install: false,
+)
+test('lifecycle_bundled_supervisor_digest_mismatch',
+    lifecycle_test,
+    args: ['bundled-supervisor-digest-mismatch'], timeout: 5)
+test('lifecycle_bundled_supervisor_path_mismatch',
+    lifecycle_test,
+    args: ['bundled-supervisor-path-mismatch'], timeout: 5)
 test('lifecycle_boot_timeout', lifecycle_test,
     args: ['boot-timeout'], timeout: 5)
 test('lifecycle_bad_hello_ack', lifecycle_test,

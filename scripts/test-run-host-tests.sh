@@ -497,6 +497,7 @@ write_embed_build_metadata \
     arm64 "$shadow_repo_identity/third_party/ish" \
     "$shadow_repo_identity/build-check" "$shadow_repo_identity"
 write_exit_program "$FAKE_BIN/ninja" 0
+write_exit_program "$SHADOW_REPO/build-host/dirty_page_test" 0
 write_exit_program "$SHADOW_REPO/build-host/procfs_test" 0
 write_exit_program "$SHADOW_REPO/build-host/ishembed_smoke" 23
 
@@ -522,6 +523,28 @@ grep -q '^smoke       : 23$' "$TEST_ROOT/runner.log" || {
     sed -n '1,160p' "$TEST_ROOT/runner.log" >&2
     exit 1
 }
+
+# The deterministic dirty-page executable is a real runner gate, not merely a
+# Meson target that CI might forget to execute.
+write_exit_program "$SHADOW_REPO/build-host/dirty_page_test" 31
+set +e
+PATH="$FAKE_BIN:$PATH" \
+    "$SHADOW_REPO/scripts/run-host-tests.sh" --no-codex \
+    > "$TEST_ROOT/dirty-page-gate.log" 2>&1
+dirty_page_gate_rc=$?
+set -e
+[[ "$dirty_page_gate_rc" == 31 ]] || {
+    printf 'expected dirty-page gate status 31, got %s\n' \
+        "$dirty_page_gate_rc" >&2
+    sed -n '1,180p' "$TEST_ROOT/dirty-page-gate.log" >&2
+    exit 1
+}
+grep -q '^dirty pages : 31$' "$TEST_ROOT/dirty-page-gate.log" || {
+    printf 'runner summary did not preserve failing dirty-page status\n' >&2
+    sed -n '1,180p' "$TEST_ROOT/dirty-page-gate.log" >&2
+    exit 1
+}
+write_exit_program "$SHADOW_REPO/build-host/dirty_page_test" 0
 
 # Cached Meson state is executable architecture metadata, not an optional
 # optimization. Every unreadable or contradictory cache must stop before a

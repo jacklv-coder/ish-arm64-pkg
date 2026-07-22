@@ -303,9 +303,9 @@ for position, start in enumerate(headers):
             f"expected {expected_platform}"
         )
     minimum = parse_version(fields.get("minos", ""))
-    if minimum > (18, 0, 0):
+    if minimum != (18, 0, 0):
         raise SystemExit(
-            f"{archive}({member}) requires iOS {fields['minos']}, above 18.0"
+            f"{archive}({member}) has minimum iOS {fields['minos']}, expected 18.0"
         )
 PY
 }
@@ -318,6 +318,7 @@ verify_archive_build_versions \
 
 for library in "$device_lib" "$simulator_lib"; do
     symbols="$(nm -gU "$library" | awk '{print $NF}')"
+    symbol_details="$(nm -m "$library")"
     for symbol in \
         _ish_embed_session_retain \
         _ish_embed_session_release \
@@ -333,6 +334,14 @@ for library in "$device_lib" "$simulator_lib"; do
         grep -qx "$symbol" <<< "$symbols"
     done
     ! grep -qx _ish_ffi_setup_vm_root <<< "$symbols"
+    grep -Eq '\(__TEXT,__text\) private external _ish_embed_sha256_matches_hex$' \
+        <<< "$symbol_details"
+    grep -Eq '\(__TEXT,__text\) private external _ish_embed_supervisor_metadata_valid$' \
+        <<< "$symbol_details"
+    ! grep -Eq '\(__TEXT,__text\) external _ish_embed_sha256_matches_hex$' \
+        <<< "$symbol_details"
+    ! grep -Eq '\(__TEXT,__text\) external _ish_embed_supervisor_metadata_valid$' \
+        <<< "$symbol_details"
 done
 
 device_sdk="$(xcrun --sdk iphoneos --show-sdk-path)"
@@ -354,6 +363,14 @@ simulator_clang="$(xcrun --sdk iphonesimulator --find clang)"
     -I"$PKG_ROOT/include" -I"$PKG_ROOT/protocol" \
     "$PKG_ROOT/c-tests/smoke.c" "$simulator_lib" -lsqlite3 \
     -o "$VERIFY_TMP/ishembed-simulator-link"
+
+for linked_binary in \
+    "$VERIFY_TMP/ishembed-device-link" \
+    "$VERIFY_TMP/ishembed-simulator-link"; do
+    linked_exports="$(nm -gU "$linked_binary" | awk '{print $NF}')"
+    ! grep -qx _ish_embed_sha256_matches_hex <<< "$linked_exports"
+    ! grep -qx _ish_embed_supervisor_metadata_valid <<< "$linked_exports"
+done
 
 verify_final_link_build_version() {
     local binary="$1"

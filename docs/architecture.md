@@ -40,6 +40,75 @@ third_party/ish + fakefs RootFS       emulator/kernel state + persistence
 - guest supervisor 作为 Linux PID 1 管理命令、PTY、信号、stdin 与 child reaping。
 - RootFS 只提供 fakefs 持久化内容，由宿主独立安装，不属于 Release。
 
+`third_party/ish` 指向本项目维护的 `ish-arm64` fork，而不是在本地直接改写别人维护的
+上游检出。原因是 join/soft-halt、嵌入式生命周期和 JIT 脏页一致性都必须修改 iSH 核心，
+outer package 无法只靠 FFI 补齐；同时 PocketRoot 的构建、回归和发布必须固定到一个经过
+审阅的精确 revision。通用修复仍可整理后回馈上游，但在上游接受并发布前，fork 让项目能
+通过独立 PR、CI 和 gitlink 审计这些窄差异，不代表接管或重写上游项目。
+
+## JIT 自修改代码一致性
+
+iSH 的 ARM64 JIT 允许翻译块直链，因此普通 guest 写入不能只记录“最后一页”：同一块内的
+跨页写或多次写会覆盖单槽，随后可能继续执行旧翻译。每个 TLB 现在维护与
+`FIBER_PAGE_HASH_SIZE` 一致的 1024 位脏桶集合。C fast path、write miss、cross-page write
+和 ARM64/x86 gadget 写路径用 `dirty_page` 保留当前精确页；切换页面时才把前一页 OR 进
+位图。dispatcher drain 时，若此前没有桶位，最终页保持精确身份直接失效；若已经发生
+切页，才把最终页补入位图并走保守的多页批处理。这样同页连续写不重复计算位图且不丢失
+精确身份，同时任意多页写仍不会漏记；READ 不置位。这组字段只负责运行时失效，
+dispatcher 排空后立即清理。
+
+x86 的 `ptraceomatic`/`unicornomatic` 不能复用上述哈希桶做内存比对：相差 1024 页的地址
+会落入同桶，而且运行时排空发生在工具比较之前。工具因此显式启用独立的 20-bit 精确页
+位图（128 KiB，并带 2 KiB 二级摘要）；写路径只在页面切换时记录完整页号，最终页在 drain
+前补入。运行时集合清空后，诊断集合仍保留到所有页比较成功才显式清理；比较失败不消费，
+可以原样重试。普通执行的指针保持 `NULL`，不分配这块诊断内存。
+
+kernel/host 通过 `mem_ptr(..., MEM_WRITE*)` 直接修改 guest memory 时采用前后两道失效：
+取得可写指针前先失效，实际 `memcpy`、atomic RMW 或 `memset` 完成后、仍持有同一
+`mem->lock` read 生命周期时再调用 `mem_did_write`。这样即使 compiler 恰好在两者之间
+发布旧 bytes，后置失效仍会删除该 block。正常页使用 atomic occupancy 快速判断；无翻译
+代码的数据页不争用全局 JIT mutex。越界、超长或地址回绕的内部报告保守地全量失效。
+
+回到 dispatcher 后，runtime 在与翻译块 compile/insert 相同的锁内检查脏页并移入
+jetsam，再以 `invalidate_gen` 清除 block/return cache。尚未发生页面切换的单页写序列仍
+保留最终页的精确身份，因此按精确页过滤候选；显式 `asbestos_invalidate_page` 也使用同一
+过滤逻辑。翻译块跨页时，`page[0]` 比较 `block->addr`，`page[1]` 必须比较
+`block->end_addr`，所以失效第二页既能删除真实跨页 block，也不会误删同一哈希桶的远端
+block。只有已经切换过页面的**多页**脏集合会把较早页折叠为哈希位图，并可能因桶碰撞
+保守地多失效；这条路径不会漏掉必须失效的翻译。
+
+检查、失效和脏集合清理不能在 coherence 锁外仅凭空桶 fast path，否则另一线程可能先
+编译旧 bytes、等待插入，然后在脏集合清空后发布 stale block。实现只在 coherence read
+side 内以 acquire 读取 atomic occupancy；确认无候选代码时可跳过全局 mutation mutex。
+进入下一直链或 RET cache 目标前，汇编 guard 会把目标 block 的 `addr`/`end_addr` 与当前
+精确脏页及较早页的保守桶集合比较。相交时才回到 dispatcher 排空脏状态并断开受影响的
+chaining/cache；不相交的纯数据写可以继续直链，待处理脏状态不会丢失。该优化避免所有写
+一律退出 dispatcher，但每次链跳仍有检查成本，写密集的旧 e2e workload 仍可能明显变慢；
+量化基线见
+[测试文档](testing.md#jit-性能基线)。
+
+正常 task 在执行 JIT 时持有 `mem->lock` 的 read side，而 lazy mapping 可能临时释放 read
+并申请 write。为避免它与脏页 drain/compile 锁形成反向等待，compiler 会在取得
+`dirty_coherence_lock` 的 write side 前预解析当前指令允许访问的页；进入该锁后，decoder
+切换为 no-fault TLB 读取，miss 只生成 guest fault，不再进入可能升级 `mem->lock` 的 MMU
+slow path。x86 decoder 同时在任何第 16 个指令字节的内存读取前生成 `#UD`，A64 则在读取
+前拒绝非 4-byte 对齐 PC；合法 A64 指令不会跨 4 KiB 页。这样 compile 从读取 guest bytes
+到插入翻译块都与 drain 串行，又不会在内层锁中请求外层内存写锁。
+
+符合 ARM64 规范的自修改代码在写入后执行 `DC ...`、`IC IVAU, Xt`、barrier 序列。数据
+cache maintenance 在共享 host bytes 上仍是 NOP；`IC IVAU` 会把 Xt 指向的页加入**执行
+该 IC 的线程**的 TLB 脏集合，然后结束当前翻译块并返回 dispatcher。这覆盖 writer 与
+cache-maintenance executor 使用不同 TLB 的合法跨线程序列，并保证在跳到已修改目标前
+消费脏集合；已直链 target 也不能先运行旧代码。没有执行规定 instruction-cache
+maintenance 的 guest 自修改序列不承诺立即可见。模拟的
+`CTR_EL0 == 0x84448004` 明确保持 DIC/IDC（bit 29/28）为 0，因此 guest 不能合法省略
+DC/IC 步骤；该常量与两位的回归和 `IC IVAU` decoder boundary 一起测试。
+
+PocketRoot Stage1 的 production artifact 只包含 **ARM64 guest**。x86 guest 代码仅作为
+fork 的兼容与回归构建：同线程写入会在中央 block-chain 与 return-cache chain 边界检查
+下一目标，仅在目标命中待处理代码脏页时退回 dispatcher；本阶段不承诺 x86 跨线程自修改
+代码的全局发布语义，也不会把 x86 guest 切片打进 PocketRoot XCFramework。
+
 ## Boot 流程
 
 1. 宿主验证 RootFS 路径、布局、来源与哈希，将可写的 `data/` + `meta.db` 目录传给
@@ -47,8 +116,11 @@ third_party/ish + fakefs RootFS       emulator/kernel state + persistence
 2. C host 创建双向协议管道与日志管道，准备 instance 状态；`out_instance == NULL`
    会在任何安装或线程副作用前被拒绝。
 3. 未指定 `supervisor_guest_path` 时，release XCFramework 将内嵌静态 AArch64
-   supervisor 原子安装到 fakefs 的内容寻址私有路径，并复核完整字节和执行模式；
-   不替换 RootFS 自带的 `/sbin/ishsv`。自定义路径完全由调用方负责。
+   supervisor 的实际 bytes 计算 SHA-256 并与构建元数据比对，通过后才原子安装到
+   fakefs 的内容寻址私有路径，并复核完整字节和执行模式；
+   不替换 RootFS 自带的 `/sbin/ishsv`。显式自定义路径会绕过这条默认 blob 安装与摘要
+   校验，完全由调用方负责。SHA-256 这里只证明实际 bytes 与同一构建的固定元数据一致，
+   不是数字签名，也不认证下载来源或发布者身份。
 4. iSH kernel 在 joinable pthread 上启动，进入 guest PID 1 supervisor。
 5. host 与 supervisor 交换 `HELLO`/`HELLO_ACK`，同时精确校验公开 ABI 版本 1 与
    wire protocol v4。只有握手成功后 boot 才返回 instance handle。
