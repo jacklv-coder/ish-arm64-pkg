@@ -787,212 +787,10 @@ static int ensure_node(const char *path, mode_t mode, dev_t dev) {
     return -1;
 }
 
-static int normalize_existing_regular_file(const char *path, mode_t mode) {
-    struct stat before;
-    if (lstat(path, &before) < 0) {
-        int error = errno;
-        slogf("ishsv: lstat(%s) failed: %s\n", path, strerror(error));
-        errno = error;
-        return -1;
-    }
-    if (!S_ISREG(before.st_mode)) {
-        slogf("ishsv: %s is not a regular file\n", path);
-        errno = EINVAL;
-        return -1;
-    }
-
-    /* O_NONBLOCK prevents a raced-in FIFO from hanging PID 1. O_NOFOLLOW asks
-     * the guest kernel not to resolve a raced-in symlink; the inode checks
-     * below remain authoritative even on kernels that ignore that flag. */
-    int fd = open(path, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC);
-    if (fd < 0) {
-        int error = errno;
-        slogf("ishsv: open(%s) failed: %s\n", path, strerror(error));
-        errno = error;
-        return -1;
-    }
-
-    int result = -1;
-    int saved = 0;
-    struct stat opened;
-    if (fstat(fd, &opened) < 0) {
-        saved = errno;
-        goto out;
-    }
-    if (!S_ISREG(opened.st_mode) || opened.st_dev != before.st_dev ||
-        opened.st_ino != before.st_ino) {
-        saved = EAGAIN;
-        goto out;
-    }
-    if ((opened.st_mode & 07777) != (mode & 07777) &&
-        fchmod(fd, mode & 07777) < 0) {
-        saved = errno;
-        goto out;
-    }
-    if (fstat(fd, &opened) < 0) {
-        saved = errno;
-        goto out;
-    }
-    if (!S_ISREG(opened.st_mode) ||
-        (opened.st_mode & 07777) != (mode & 07777)) {
-        saved = EACCES;
-        goto out;
-    }
-
-    /* Do not report success if the path was replaced while the descriptor was
-     * open. Contents are never read or rewritten; only the verified inode's
-     * mode may be normalized. */
-    struct stat current;
-    if (lstat(path, &current) < 0) {
-        saved = errno;
-        goto out;
-    }
-    if (!S_ISREG(current.st_mode) || current.st_dev != opened.st_dev ||
-        current.st_ino != opened.st_ino) {
-        saved = EAGAIN;
-        goto out;
-    }
-    result = 0;
-
-out:
-    if (close(fd) < 0 && result == 0) {
-        saved = errno;
-        result = -1;
-    }
-    if (result < 0) {
-        int error = saved ? saved : EIO;
-        slogf("ishsv: validate %s failed: %s\n", path, strerror(error));
-        errno = error;
-    }
-    return result;
-}
-
-/* Publish a fully-written default without ever exposing partial contents and
- * without replacing a concurrently-created user file. The temporary name is
- * the same length as "config.toml", so every valid final path also fits. */
-static int publish_default_file(const char *path, mode_t mode,
-                                const char *contents) {
-    static const char temporary_name[] = ".tmp.XXXXXX";
-    char temporary_path[PATH_MAX];
-    const char *slash = strrchr(path, '/');
-    size_t prefix_len = slash ? (size_t)(slash - path) + 1 : 0;
-    if (prefix_len + sizeof(temporary_name) > sizeof(temporary_path)) {
-        errno = ENAMETOOLONG;
-        return -1;
-    }
-    memcpy(temporary_path, path, prefix_len);
-    memcpy(temporary_path + prefix_len, temporary_name,
-           sizeof(temporary_name));
-
-    int fd = mkstemp(temporary_path);
-    if (fd < 0) return -1;
-    size_t len = strlen(contents);
-    int result = 0;
-    int saved = 0;
-    struct stat opened, named;
-    if (fstat(fd, &opened) < 0 || lstat(temporary_path, &named) < 0) {
-        result = -1;
-        saved = errno;
-    } else if (!S_ISREG(opened.st_mode) || !S_ISREG(named.st_mode) ||
-               opened.st_dev != named.st_dev || opened.st_ino != named.st_ino) {
-        result = -1;
-        saved = EAGAIN;
-    }
-#ifdef ISH_SUPERVISOR_TESTING
-    extern int (*ishsv_test_file_write_hook)(int, const void *, size_t);
-    if (result == 0)
-        result = ishsv_test_file_write_hook
-            ? ishsv_test_file_write_hook(fd, contents, len)
-            : write_full(fd, contents, len);
-#else
-    if (result == 0) result = write_full(fd, contents, len);
-#endif
-    if (result < 0 && saved == 0) saved = errno;
-    if (result == 0 && fchmod(fd, mode & 07777) < 0) {
-        result = -1;
-        saved = errno;
-    }
-    if (result == 0 && fstat(fd, &opened) < 0) {
-        result = -1;
-        saved = errno;
-    }
-    if (result == 0 && (!S_ISREG(opened.st_mode) ||
-                        (opened.st_mode & 07777) != (mode & 07777))) {
-        result = -1;
-        saved = EACCES;
-    }
-    if (close(fd) < 0 && result == 0) {
-        result = -1;
-        saved = errno;
-    }
-    if (result < 0) {
-        (void)unlink(temporary_path);
-        errno = saved ? saved : EIO;
-        return -1;
-    }
-
-    if (link(temporary_path, path) < 0) {
-        saved = errno;
-        (void)unlink(temporary_path);
-        errno = saved;
-        return -1;
-    }
-
-    struct stat published;
-    int published_ok = 0;
-    if (lstat(path, &published) < 0) {
-        saved = errno;
-    } else if (!S_ISREG(published.st_mode) ||
-               published.st_dev != opened.st_dev ||
-               published.st_ino != opened.st_ino) {
-        saved = EAGAIN;
-    } else if ((published.st_mode & 07777) != (mode & 07777)) {
-        saved = EACCES;
-    } else {
-        published_ok = 1;
-    }
-    if (!published_ok) {
-        (void)unlink(temporary_path);
-        errno = saved;
-        return -1;
-    }
-    if (unlink(temporary_path) < 0)
-        slogf("ishsv: unlink(%s) failed: %s\n",
-              temporary_path, strerror(errno));
-    return 0;
-}
-
-static int ensure_regular_file_with_default(const char *path, mode_t mode,
-                                            const char *contents) {
-    /* A bounded retry handles a file created between lstat and link without
-     * allowing a malicious path churn to keep PID 1 busy indefinitely. */
-    for (unsigned attempt = 0; attempt < 4; attempt++) {
-        struct stat state;
-        if (lstat(path, &state) == 0)
-            return normalize_existing_regular_file(path, mode);
-        if (errno != ENOENT) {
-            int error = errno;
-            slogf("ishsv: lstat(%s) failed: %s\n", path, strerror(error));
-            errno = error;
-            return -1;
-        }
-        if (publish_default_file(path, mode, contents) == 0) return 0;
-        if (errno != EEXIST) {
-            int error = errno;
-            slogf("ishsv: create %s failed: %s\n", path, strerror(error));
-            errno = error;
-            return -1;
-        }
-    }
-    slogf("ishsv: create %s raced repeatedly\n", path);
-    errno = EAGAIN;
-    return -1;
-}
-
-/* Revalidate and, where safe, repair /dev nodes, devpts/proc mounts, and Codex
- * runtime state immediately before every chrooted spawn. A path-only success
- * cache is unsafe because a VM root can be deleted/replaced at the same path
- * or lose a mount/directory while this supervisor remains alive. */
+/* Revalidate and, where safe, repair /dev nodes, devpts/proc mounts, and the
+ * conventional root home immediately before every chrooted spawn. A path-only
+ * success cache is unsafe because a VM root can be deleted/replaced at the same
+ * path or lose a mount/directory while this supervisor remains alive. */
 static int ensure_vm_devices(const char *chroot_path) {
     if (!chroot_path || chroot_path[0] != '/') {
         errno = EINVAL;
@@ -1035,7 +833,7 @@ static int ensure_vm_devices(const char *chroot_path) {
                             ISH_FS_MAGIC_DEVPTS) < 0) return -1;
 
     /* Mount procfs so /proc/self/exe and friends work. Many modern
-     * tools (codex, glibc PATH detection, busybox top, …) read
+     * tools (Node.js, glibc PATH detection, busybox top, …) read
      * /proc/self/exe and silently degrade or refuse to start when it
      * isn't there. Like devpts, procfs is synthetic in iSH and the
      * supervisor is outside any chroot, so this just works. */
@@ -1044,22 +842,9 @@ static int ensure_vm_devices(const char *chroot_path) {
     if (ensure_synthetic_fs("proc", p, root_type,
                             ISH_FS_MAGIC_PROC) < 0) return -1;
 
-    /* Codex refuses CODEX_HOME if the directory does not already exist,
-     * and uses CODEX_HOME/tmp for its arg0 helper symlink dirs. Revalidate
-     * these invariants on every spawn so a replaced root is repaired. */
-    if (vm_path(p, chroot_path, "/root") < 0 || mkdir_p(p, 0700) < 0 ||
-        vm_path(p, chroot_path, "/root/.codex") < 0 ||
-        mkdir_p(p, 0700) < 0 ||
-        vm_path(p, chroot_path, "/root/.codex/config.toml") < 0 ||
-        ensure_regular_file_with_default(p, 0600,
-        "[tui]\n"
-        "alternate_screen = \"never\"\n"
-        "animations = false\n"
-        "show_tooltips = false\n") < 0 ||
-        vm_path(p, chroot_path, "/root/.codex/tmp") < 0 ||
-        mkdir_p(p, 0700) < 0 ||
-        vm_path(p, chroot_path, "/root/.codex/tmp/arg0") < 0 ||
-        mkdir_p(p, 0700) < 0)
+    /* Keep the conventional root home available for shells and optional
+     * packages without creating state for any specific developer tool. */
+    if (vm_path(p, chroot_path, "/root") < 0 || mkdir_p(p, 0700) < 0)
         return -1;
 
     return 0;
@@ -1117,7 +902,7 @@ static int do_spawn(uint32_t sid, uint8_t flags, const uint8_t *p, uint32_t plen
 
     /* If we're spawning into a chrooted VM, make sure that VM has
      * /proc, /dev/ptmx and /dev/pts mounted, regardless of whether
-     * the caller wants a TTY. Non-interactive commands (codex --version,
+     * the caller wants a TTY. Non-interactive commands (node --version,
      * npm install, busybox sh -c '…') also read /proc/self/exe and
      * /proc/self/status. Doing this only in the want_tty branch was
      * a bug: oneshot commands ended up running against an empty /proc.

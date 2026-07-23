@@ -123,7 +123,7 @@ public final class IshTerminal: @unchecked Sendable {
         spawn.env = options.env.isEmpty ? nil : options.env
         // Hand the supervisor the initial winsize so the guest's pty
         // starts at the right dimensions — TUIs that read the size
-        // synchronously at boot (codex, vim, htop, ranger) will lay
+        // synchronously at boot (vim, htop, ranger) will lay
         // themselves out correctly from the first frame.
         spawn.initialWindowSize = (
             rows: UInt16(clamping: options.size.rows),
@@ -205,7 +205,7 @@ public final class IshTerminal: @unchecked Sendable {
     // MARK: resize
 
     /// Resize the local emulator grid AND the guest pty. The guest
-    /// receives SIGWINCH; ncurses/ratatui/Ink-based TUIs (codex, vim,
+    /// receives SIGWINCH; ncurses/ratatui/Ink-based TUIs (vim,
     /// htop) will re-layout on their next paint. For pipe-mode
     /// sessions the pty resize is a silent no-op.
     public func resize(_ size: Size) {

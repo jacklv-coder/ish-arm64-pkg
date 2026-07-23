@@ -197,12 +197,9 @@ builder 在稳定普通锁文件上持有内核 `flock`，并在唯一同卷 sta
 `fs.previous.*`。`--print-identity` 给出 recipe 前缀，覆盖 builder、supervisor、协议头、
 iSH revision/工作树/子模块、fakefsify 来源和 Alpine pin；marker 再绑定实际 fakefsify、
 arm64 supervisor、BusyBox 与初始 meta/data seal。runner 从验证到最后一个 consumer 都持有
-RootFS/Codex 锁，并验证 receipt、recipe、SQLite 行类型/16-byte stat/root、meta/data 全路径、
-关键摘要；合法运行态写入仍可复用。`build/fs-codex` 身份还绑定 clean receipt/当前内容、
-包名、exact/tag 请求分类、VM/bin、provision 输入与实际安装版本；exact SemVer 必须与实际
-版本逐字相等，tag 则记录解析后的实际版本。复用还会核对 `package.json` bin、guest 可执行
-模式以及安全映射到 package target 的全局入口，任一失配即重新 provision。该身份只用于本地
-开发测试，不能替代产品 RootFS 的来源、许可证、最终内容摘要和安装事务。
+RootFS 锁，并验证 receipt、recipe、SQLite 行类型/16-byte stat/root、meta/data 全路径、
+关键摘要；合法运行态写入仍可复用。仓库不再提供或测试 Codex CLI provision；Node.js/npm
+仍可由调用方作为普通 guest package 显式安装。
 `ROOTFS_RECEIPT` 是 lineage/初始快照凭据：它绑定静态 identity marker 与构建时的初始
 `fs.tar.gz`/`SHA256SUMS`。运行态写入改变 `fs` 后，`--verify-bundle` 会验证当前树结构、
 数据库/关键二进制身份以及初始归档的完整性，但不证明当前 `fs` 字节等于 tar；该 tar

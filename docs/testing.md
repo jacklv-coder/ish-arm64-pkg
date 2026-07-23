@@ -12,7 +12,7 @@ iOS 18 二进制、内部 wire v4 和发布供应链处于同一可解释状态�
 | 协议/摘要单元 | `proto_test`、`supervisor_stdin_test`、`sha256_test` | v4 帧解析、边界、stdin partial write/反压、SHA-256 标准向量与畸形元数据拒绝 | 真正 iSH boot |
 | 生命周期 | `lifecycle_test` | retain/release、close/read/write/signal 交错、shutdown/busy、PID identity、错误内嵌摘要/路径在安装前失败 | Stage2 Swift borrow 已完成 |
 | JIT 脏页 | `dirty_page_test`、`dirty-page-trace` | READ 不置位、fast/miss/cross-page 写合并、单页碰撞精确过滤、显式跨页 `end_addr` 失效、多页保守桶、host/kernel 后置失效、精确 tracer、跨 TLB `IC IVAU` 与 ARM64/x86 直链边界 | 非规范的无 cache-maintenance 自修改代码立即可见；x86 跨线程全局发布；原写路径吞吐 |
-| native 集成 | `procfs_test`、`ishembed_smoke`、`codex_test` | fakefs、spawn、procfs、命令链路 | RootFS 来源/许可可信 |
+| native 集成 | `procfs_test`、`ishembed_smoke` | fakefs、spawn、procfs、通用命令链路 | RootFS 来源/许可可信；特定用户工具兼容性 |
 | sanitizer | ASan/UBSan，必要时 TSan | 已覆盖路径上的越界、UAF、未定义行为和数据竞争 | 所有调度组合都无缺陷 |
 | Swift RootFS-free | instance/session gate、shutdown retry、公开 API smoke | oneshot/session lease 阻止旧 ABI UAF、失败保留 handle、旧公开签名可编译 | 任意 C 调用都可取消或 close 始终有界 |
 | Swift manifest 真链接 | `test-swift-ios.sh --manifest-binary` | Stage1 Swift 仍与发布前 v0.3.3 binary 链接 | 新 native 符号已公开 |
@@ -117,8 +117,8 @@ meson test -C build-test --print-errorlogs
   页尾回归证明 decoder 在第 16 byte 的 unmapped-page 读取前生成 `#UD`；ARM64 高地址相邻页
   TLB 别名回归证明页尾最后一条对齐 A64 指令正常运行，而未对齐 PC 直接报错且不会预取、
   驱逐起始页；
-- chroot Codex 配置保留自定义内容并修正为 `0600`、删除后重建默认值，以及不覆盖
-  symlink、目录和 FIFO 等恶意类型。
+- chroot 准备只修复通用 `/dev`、devpts、procfs 与 `/root`，不会创建 Codex CLI
+  配置或其他工具专用状态。
 
 ## JIT 性能基线
 
@@ -171,9 +171,7 @@ scripts/build-rootfs.sh --print-inputs
 scripts/build-rootfs.sh --print-identity
 scripts/build-rootfs.sh --verify-rootfs build/fs
 scripts/build-rootfs.sh --verify-bundle build
-scripts/run-host-tests.sh --no-codex --smoke
-# 完整 Codex guest 流程（需要联网准备独立测试 RootFS）：
-scripts/run-host-tests.sh
+scripts/run-host-tests.sh --smoke
 ```
 
 runner 会明确把 `scripts/alpine-rootfs-pin.sh` 传给 builder，并要求 build-check、build-host
@@ -188,11 +186,8 @@ fakefsify、supervisor、BusyBox 与初始 meta/data seal。发布前执行完�
 四件套 receipt、SQLite quick-check、正整数 inode、16-byte stat BLOB、唯一空 root、meta/data
 全路径一致性及 AArch64 supervisor/BusyBox 摘要验证。`fs`、tar、checksums 先发布，receipt
 最后提交；替换使用 exchange 保持 fs 可见，失败逆序回滚，成功不保留旧代际。runner 从
-验证到最后一次消费都持有 RootFS/Codex 锁，因此并发 builder 不能在 use 阶段换树。合法
-运行态写入仍可复用，复制/篡改 marker 不足以通过。`fs-codex` 身份绑定 clean receipt/内容、
-包、exact/tag 请求分类、VM/bin、provision 输入与实际安装版本；exact 错装不同版本会在发布
-前失败，tag 会绑定解析后的版本。复用还验证 package bin target、guest executable mode 与
-全局入口映射；失配时强制 provision，成功返回却没有匹配布局/身份会使 runner 失败。
+验证到最后一次消费都持有 RootFS 锁，因此并发 builder 不能在 use 阶段换树。合法运行态
+写入仍可复用，复制/篡改 marker 不足以通过。
 
 receipt 只表示 lineage/初始快照：它绑定静态 marker 与初始 `fs.tar.gz`/`SHA256SUMS`。
 运行态 mutation 后，`--verify-bundle` 的通过条件是“当前 `fs` 结构、数据库/关键身份有效，
@@ -203,12 +198,7 @@ receipt 只表示 lineage/初始快照：它绑定静态 marker 与初始 `fs.ta
 缺失、格式错误或不匹配都会失败。`scripts/test-run-host-tests.sh` 用隔离 fixture 覆盖首次
 构建、四件套复用、旧架构/pin/缺标记、实际 supervisor 篡改、畸形 SQLite、空/损坏/PID
 复用锁、两个并发 builder、运行态 mutation、每个发布步骤故障与 TERM journal gap、use 期
-锁竞争、consumer 后台进程的锁 FD 隔离，以及 `fs-codex` base/请求/实际版本漂移、exact
-错装、tag 解析、bin target/global entry 缺失和状态聚合。
-纯 C `provision_codex_format` 回归另外覆盖输入策略允许的 194 字节 scoped package 与
-128 字节版本/tag 组合（323 字节 npm target），并证明少一个字节的缓冲区会失败而不是
-静默截断。fixture 还会断开全局入口的真实 host hardlink、同时保留 fakefs inode，验证这种
-host backing 与数据库不一致也不能通过复用。
+锁竞争、consumer 后台进程的锁 FD 隔离和状态聚合。
 
 host-test 与 production iOS 构建都必须在 iSH `c_args` 中包含
 `-DISH_DISABLE_SKIP_BRK=1`。runner 对旧 `build-check` 做 Meson introspection；缺少该宏会以

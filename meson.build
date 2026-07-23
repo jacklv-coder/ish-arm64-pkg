@@ -113,21 +113,6 @@ if ish_build_dir != ''
             include_directories: [embed_includes],
             install: false,
         )
-        executable('codex_test',
-            ['c-tests/codex_test.c'],
-            dependencies: ish_test_deps,
-            include_directories: [embed_includes],
-            install: false,
-        )
-        executable('provision_codex',
-            [
-                'c-tests/provision_codex.c',
-                'c-tests/provision_codex_format.c',
-            ],
-            dependencies: ish_test_deps,
-            include_directories: [embed_includes],
-            install: false,
-        )
         dirty_page_test = executable('dirty_page_test',
             ['c-tests/dirty_page_test.c'],
             dependencies: ish_test_deps,
@@ -146,17 +131,6 @@ proto_test = executable('proto_test',
     install: false,
 )
 test('proto_test', proto_test)
-
-# Pure-C boundary regression for the validated npm package/version tuple used
-# by provision_codex. This must reject truncation rather than install a prefix.
-provision_codex_format_test = executable('provision_codex_format_test',
-    [
-        'c-tests/provision_codex_format.c',
-        'c-tests/provision_codex_format_test.c',
-    ],
-    install: false,
-)
-test('provision_codex_format', provision_codex_format_test)
 
 # Dependency-free SHA-256 known-answer tests protect the runtime check applied
 # to the generated bundled-supervisor bytes before they enter fakefs.

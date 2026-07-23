@@ -12,7 +12,6 @@
 int (*ishsv_test_mount_hook)(const char *, const char *);
 int (*ishsv_test_statfs_type_hook)(const char *, uint64_t *);
 int (*ishsv_test_mknod_hook)(const char *, mode_t, dev_t);
-int (*ishsv_test_file_write_hook)(int, const void *, size_t);
 int (*ishsv_test_waitid_hook)(idtype_t, id_t, siginfo_t *, int);
 pid_t (*ishsv_test_waitpid_hook)(pid_t, int *, int);
 int (*ishsv_test_kill_hook)(pid_t, int);
@@ -579,14 +578,6 @@ static int test_vm_mknod(const char *path, mode_t mode, dev_t dev) {
     return 0;
 }
 
-static int test_vm_file_write_failure(int fd, const void *bytes, size_t len) {
-    (void)fd;
-    (void)bytes;
-    (void)len;
-    errno = ENOSPC;
-    return -1;
-}
-
 static size_t make_chroot_spawn_payload(uint8_t *payload, size_t capacity,
                                         const char *chroot_path) {
     const char command[] = "/bin/true";
@@ -608,27 +599,17 @@ static size_t make_chroot_spawn_payload(uint8_t *payload, size_t capacity,
 
 static void remove_prepared_vm_tree(const char *root) {
     char path[PATH_MAX];
-#define REMOVE_VM_FILE(suffix)                                                \
-    do {                                                                      \
-        CHECK(vm_path(path, root, suffix) == 0);                              \
-        if (unlink(path) < 0) CHECK(errno == ENOENT);                         \
-    } while (0)
 #define REMOVE_VM_DIR(suffix)                                                 \
     do {                                                                      \
         CHECK(vm_path(path, root, suffix) == 0);                              \
         if (rmdir(path) < 0) CHECK(errno == ENOENT);                          \
     } while (0)
-    REMOVE_VM_FILE("/root/.codex/config.toml");
-    REMOVE_VM_DIR("/root/.codex/tmp/arg0");
-    REMOVE_VM_DIR("/root/.codex/tmp");
-    REMOVE_VM_DIR("/root/.codex");
     REMOVE_VM_DIR("/root");
     REMOVE_VM_DIR("/proc");
     REMOVE_VM_DIR("/dev/pts");
     REMOVE_VM_DIR("/dev");
     CHECK(rmdir(root) == 0);
 #undef REMOVE_VM_DIR
-#undef REMOVE_VM_FILE
 }
 
 static void reset_vm_prepare_state(void) {
@@ -646,7 +627,6 @@ static void enable_vm_prepare_hooks(void) {
 }
 
 static void disable_vm_prepare_hooks(void) {
-    ishsv_test_file_write_hook = NULL;
     ishsv_test_mount_hook = NULL;
     ishsv_test_statfs_type_hook = NULL;
     ishsv_test_mknod_hook = NULL;
@@ -716,116 +696,9 @@ static void test_vm_prepare_rejects_long_path_and_wrong_node(void) {
     CHECK(rmdir(root) == 0);
 }
 
-static const char vm_expected_config[] =
-    "[tui]\n"
-    "alternate_screen = \"never\"\n"
-    "animations = false\n"
-    "show_tooltips = false\n";
-
-static void check_regular_file_contents(const char *path, mode_t mode,
-                                        const char *expected,
-                                        size_t expected_len) {
-    int fd = open(path, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC);
-    CHECK(fd >= 0);
-    struct stat state;
-    CHECK(fstat(fd, &state) == 0);
-    CHECK(S_ISREG(state.st_mode));
-    CHECK((state.st_mode & 07777) == (mode & 07777));
-    CHECK(state.st_size >= 0);
-    CHECK((uintmax_t)state.st_size == (uintmax_t)expected_len);
-    char *contents = malloc(expected_len ? expected_len : 1);
-    CHECK(contents != NULL);
-    if (expected_len > 0) {
-        CHECK(read_full(fd, contents, expected_len) == 0);
-        CHECK(memcmp(contents, expected, expected_len) == 0);
-    }
-    free(contents);
-    CHECK(close(fd) == 0);
-}
-
-static void test_vm_prepare_config_semantics(void) {
-    char root_template[] = "/tmp/ishsv-vm-config.XXXXXX";
-    char *root = mkdtemp(root_template);
-    CHECK(root != NULL);
-    reset_vm_prepare_state();
-    enable_vm_prepare_hooks();
-
-    /* A failed first write is unlinked, so it cannot poison every retry. */
-    ishsv_test_file_write_hook = test_vm_file_write_failure;
-    CHECK(ensure_vm_devices(root) == -1);
-    CHECK(errno == ENOSPC);
-    char config[PATH_MAX];
-    CHECK(vm_path(config, root, "/root/.codex/config.toml") == 0);
-    CHECK(access(config, F_OK) == -1 && errno == ENOENT);
-
-    /* A legal user customization survives both the retry and a later
-     * revalidation. Only its overly broad mode is normalized. */
-    ishsv_test_file_write_hook = NULL;
-    int fd = open(config, O_WRONLY | O_CREAT | O_EXCL, 0600);
-    CHECK(fd >= 0);
-    static const char custom_config[] =
-        "[tui]\n"
-        "alternate_screen = \"always\"\n"
-        "animations = true\n"
-        "custom_key = \"keep me\"\n";
-    CHECK(write_full(fd, custom_config, sizeof(custom_config) - 1) == 0);
-    CHECK(fchmod(fd, 0644) == 0);
-    CHECK(close(fd) == 0);
-    CHECK(ensure_vm_devices(root) == 0);
-    check_regular_file_contents(config, 0600, custom_config,
-                                sizeof(custom_config) - 1);
-    CHECK(ensure_vm_devices(root) == 0);
-    check_regular_file_contents(config, 0600, custom_config,
-                                sizeof(custom_config) - 1);
-
-    /* Removing the customization rebuilds a complete default atomically. */
-    CHECK(unlink(config) == 0);
-    CHECK(ensure_vm_devices(root) == 0);
-    check_regular_file_contents(config, 0600, vm_expected_config,
-                                sizeof(vm_expected_config) - 1);
-
-    /* A symlink is rejected without following it, changing its target's mode,
-     * or overwriting its target contents. */
-    CHECK(unlink(config) == 0);
-    char target[PATH_MAX];
-    CHECK(vm_path(target, root, "/root/.codex/user-config.toml") == 0);
-    fd = open(target, O_WRONLY | O_CREAT | O_EXCL, 0600);
-    CHECK(fd >= 0);
-    static const char target_contents[] = "user-owned\n";
-    CHECK(write_full(fd, target_contents, sizeof(target_contents) - 1) == 0);
-    CHECK(fchmod(fd, 0644) == 0);
-    CHECK(close(fd) == 0);
-    CHECK(symlink("user-config.toml", config) == 0);
-    CHECK(ensure_vm_devices(root) == -1);
-    CHECK(errno == EINVAL);
-    struct stat state;
-    CHECK(lstat(config, &state) == 0 && S_ISLNK(state.st_mode));
-    check_regular_file_contents(target, 0644, target_contents,
-                                sizeof(target_contents) - 1);
-    CHECK(unlink(config) == 0);
-    CHECK(unlink(target) == 0);
-
-    /* Directories and other non-regular objects are rejected in place. */
-    CHECK(mkdir(config, 0700) == 0);
-    CHECK(ensure_vm_devices(root) == -1);
-    CHECK(errno == EINVAL);
-    CHECK(lstat(config, &state) == 0 && S_ISDIR(state.st_mode));
-    CHECK(rmdir(config) == 0);
-
-    CHECK(mkfifo(config, 0600) == 0);
-    CHECK(ensure_vm_devices(root) == -1);
-    CHECK(errno == EINVAL);
-    CHECK(lstat(config, &state) == 0 && S_ISFIFO(state.st_mode));
-    CHECK(unlink(config) == 0);
-
-    remove_prepared_vm_tree(root);
-    disable_vm_prepare_hooks();
-}
-
 static void check_vm_runtime_state(const char *root) {
     static const char *const directories[] = {
-        "/dev", "/dev/pts", "/proc", "/root", "/root/.codex",
-        "/root/.codex/tmp", "/root/.codex/tmp/arg0",
+        "/dev", "/dev/pts", "/proc", "/root",
     };
     char path[PATH_MAX];
     for (size_t i = 0; i < sizeof(directories) / sizeof(directories[0]); i++) {
@@ -833,9 +706,10 @@ static void check_vm_runtime_state(const char *root) {
         CHECK(path_is_directory(path));
     }
 
-    CHECK(vm_path(path, root, "/root/.codex/config.toml") == 0);
-    check_regular_file_contents(path, 0600, vm_expected_config,
-                                sizeof(vm_expected_config) - 1);
+    CHECK(vm_path(path, root, "/root/.codex") == 0);
+    struct stat state;
+    CHECK(lstat(path, &state) == -1);
+    CHECK(errno == ENOENT);
 }
 
 /* A path string is not a stable VM identity. Replacing the directory at the
@@ -876,8 +750,8 @@ static void test_vm_prepare_revalidates_replaced_root(void) {
     disable_vm_prepare_hooks();
 }
 
-/* Correct mounts are a statfs fast path, while missing mounts/directories and
- * config are repaired on the next spawn into the same root. */
+/* Correct mounts are a statfs fast path, while missing mounts/directories are
+ * repaired on the next spawn into the same root. */
 static void test_vm_prepare_repairs_lost_runtime_state(void) {
     char root_template[] = "/tmp/ishsv-vm-repair.XXXXXX";
     char *root = mkdtemp(root_template);
@@ -890,15 +764,13 @@ static void test_vm_prepare_repairs_lost_runtime_state(void) {
     CHECK(vm_prepare_mount_calls == 2);
     CHECK(vm_prepare_mknod_calls == 8);
 
-    /* Revalidation checks nodes/config again but must not stack mounts. */
+    /* Revalidation checks nodes again but must not stack mounts. */
     CHECK(ensure_vm_devices(root) == 0);
     CHECK(vm_prepare_mount_calls == 2);
     CHECK(vm_prepare_mknod_calls == 16);
 
     char path[PATH_MAX];
-    CHECK(vm_path(path, root, "/root/.codex/config.toml") == 0);
-    CHECK(unlink(path) == 0);
-    CHECK(vm_path(path, root, "/root/.codex/tmp/arg0") == 0);
+    CHECK(vm_path(path, root, "/root") == 0);
     CHECK(rmdir(path) == 0);
     CHECK(vm_path(path, root, "/proc") == 0);
     CHECK(rmdir(path) == 0);
@@ -1574,7 +1446,6 @@ int main(void) {
     test_spawn_parser_rejects_wrapping_lengths();
     test_vm_prepare_failure_is_error_and_retryable();
     test_vm_prepare_rejects_long_path_and_wrong_node();
-    test_vm_prepare_config_semantics();
     test_vm_prepare_revalidates_replaced_root();
     test_vm_prepare_repairs_lost_runtime_state();
     test_stdin_round_budget_and_fair_rotation();

@@ -5,20 +5,14 @@
 # 2. Ensures $REPO/build-check (iSH static libs) exists.
 # 3. Configures $REPO/build-host (embed + tests) if missing.
 # 4. Builds and runs the deterministic JIT dirty-page regression.
-# 5. Provisions fs-codex on demand and runs requested procfs/smoke stages.
-# 6. Runs codex_test against the provisioned RootFS.
+# 5. Runs requested procfs/smoke stages.
 #
 # Flags:
-#   --no-codex     skip codex provisioning + codex_test (fast loop for
-#                  procfs/syscall iteration)
-#   --reprovision  FORCE=1 redo apk + npm install
 #   --smoke        also run ishembed_smoke
 #
 # Usage:
-#   scripts/run-host-tests.sh                  # full loop
-#   scripts/run-host-tests.sh --no-codex       # ~30s loop
-#   scripts/run-host-tests.sh --no-codex --smoke
-#   scripts/run-host-tests.sh --reprovision    # rebuild fs-codex
+#   scripts/run-host-tests.sh                  # product runtime loop
+#   scripts/run-host-tests.sh --smoke
 #
 # A missing development RootFS is built from scripts/alpine-rootfs-pin.sh.
 # For a reviewed alternate input, set ALPINE_VERSION and ALPINE_SHA256 together.
@@ -31,20 +25,13 @@ set -euo pipefail
 repo="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo"
 
-want_codex=1
 want_smoke=0
-force_provision=0
 procfs_rc=0
 dirty_page_rc=0
 smoke_rc=0
-provision_rc=0
-codex_rc=0
-codex_ran=0
 
 for arg in "$@"; do
     case "$arg" in
-        --no-codex)     want_codex=0 ;;
-        --reprovision)  force_provision=1 ;;
         --smoke)        want_smoke=1 ;;
         -h|--help)
             sed -n '2,/^$/p' "$0"
@@ -61,13 +48,12 @@ ish_src="$repo/third_party/ish"
 ish_build="$repo/build-check"
 embed_build="$repo/build-host"
 fs_clean="$repo/build/fs"
-fs_codex="$repo/build/fs-codex"
 rootfs_inputs="${ROOTFS_INPUTS_FILE:-$repo/scripts/alpine-rootfs-pin.sh}"
 generation_lock_dir="$repo/build"
 
 # The runner holds stable-inode kernel locks from validation through the last
 # consumer. This closes the validate-then-replace race with a concurrent RootFS
-# builder or Codex provisioner. Owner metadata is diagnostic and authenticates
+# builder. Owner metadata is diagnostic and authenticates
 # nested scripts; stale/corrupt bytes never determine whether a lock is live.
 LOCK_PATHS=()
 LOCK_FDS=()
@@ -484,11 +470,6 @@ trap 'exit 129' HUP
 
 acquire_generation_lock "$generation_lock_dir/.rootfs-build.lock" rootfs
 rootfs_lock_token="$ACQUIRED_LOCK_TOKEN"
-codex_lock_token=""
-if [[ $want_codex -eq 1 ]]; then
-    acquire_generation_lock "$generation_lock_dir/.fs-codex.lock" codex
-    codex_lock_token="$ACQUIRED_LOCK_TOKEN"
-fi
 
 rootfs_stale_reason=""
 rootfs_matches_expected() {
@@ -538,38 +519,6 @@ if [[ $need_rootfs_build -eq 1 ]]; then
         echo "ERROR: RootFS builder returned success without matching identity: $rootfs_stale_reason" >&2
         exit 74
     fi
-    # Every fs-codex tree derives from the clean RootFS. Do not let its older
-    # timestamp-based stamp reuse a pre-transition architecture after a rebuild.
-    force_provision=1
-fi
-
-if [[ $want_codex -eq 1 ]]; then
-    codex_rootfs_matches_expected() {
-        local verify_output
-        if ! verify_output="$(
-            ROOTFS_INHERITED_LOCK_PID="$$" \
-            ROOTFS_INHERITED_LOCK_TOKEN="$rootfs_lock_token" \
-            CODEX_INHERITED_LOCK_PID="$$" \
-            CODEX_INHERITED_LOCK_TOKEN="$codex_lock_token" \
-                "$repo/scripts/provision-codex-rootfs.sh" --verify \
-                8>&- 9>&- 2>&1
-        )"; then
-            rootfs_stale_reason="${verify_output:-provisioned RootFS validation failed}"
-            return 1
-        fi
-        rootfs_stale_reason=""
-        return 0
-    }
-    if [[ -L "$fs_codex" ]]; then
-        echo "ERROR: refusing to follow provisioned RootFS symlink: $fs_codex" >&2
-        exit 65
-    elif [[ -e "$fs_codex" && ! -d "$fs_codex" ]]; then
-        echo "ERROR: refusing to replace non-directory provisioned RootFS: $fs_codex" >&2
-        exit 65
-    elif [[ -d "$fs_codex" ]] && ! codex_rootfs_matches_expected; then
-        echo "[host-tests] provisioned RootFS identity is stale; forcing reprovision" >&2
-        force_provision=1
-    fi
 fi
 
 # ---- 2. iSH static libs -------------------------------------------------
@@ -613,7 +562,7 @@ echo "= dirty_page_test"
 echo "================================================================"
 "$embed_build/dirty_page_test" 8>&- 9>&- || dirty_page_rc=$?
 
-# ---- 5. procfs / smoke (no codex needed) -------------------------------
+# ---- 5. procfs / smoke -------------------------------------------------
 
 echo
 echo "================================================================"
@@ -631,37 +580,6 @@ if [[ $want_smoke -eq 1 ]]; then
         8>&- 9>&- || smoke_rc=$?
 fi
 
-# ---- 6. codex ----------------------------------------------------------
-
-if [[ $want_codex -eq 1 ]]; then
-    if [[ $force_provision -eq 1 ]]; then export FORCE=1; fi
-    echo
-    echo "================================================================"
-    echo "= provisioning fs-codex (apk add nodejs npm; npm i -g @openai/codex)"
-    echo "================================================================"
-    ROOTFS_INHERITED_LOCK_PID="$$" \
-    ROOTFS_INHERITED_LOCK_TOKEN="$rootfs_lock_token" \
-    CODEX_INHERITED_LOCK_PID="$$" \
-    CODEX_INHERITED_LOCK_TOKEN="$codex_lock_token" \
-        "$repo/scripts/provision-codex-rootfs.sh" \
-        8>&- 9>&- || provision_rc=$?
-
-    if [[ $provision_rc -eq 0 ]]; then
-        if ! codex_rootfs_matches_expected; then
-            echo "ERROR: provisioning returned success without a matching arm64 RootFS identity" >&2
-            provision_rc=74
-        else
-            codex_ran=1
-            echo
-            echo "================================================================"
-            echo "= codex_test"
-            echo "================================================================"
-            ISH_EMBED_ROOTFS="$fs_codex" "$embed_build/codex_test" \
-                8>&- 9>&- || codex_rc=$?
-        fi
-    fi
-fi
-
 # ---- summary -----------------------------------------------------------
 
 echo
@@ -671,14 +589,6 @@ echo "================================================================"
 echo "dirty pages : $dirty_page_rc"
 echo "procfs_test : $procfs_rc"
 [[ $want_smoke -eq 1 ]] && echo "smoke       : $smoke_rc"
-if [[ $want_codex -eq 1 ]]; then
-    echo "provision   : $provision_rc"
-    if [[ $codex_ran -eq 1 ]]; then
-        echo "codex_test  : $codex_rc"
-    else
-        echo "codex_test  : not run (provision failed)"
-    fi
-fi
 
 # Preserve the first non-zero status while still running every requested stage
 # whose prerequisites succeeded. A zero exit therefore proves that every stage
@@ -689,13 +599,5 @@ if [[ $suite_rc -eq 0 && $procfs_rc -ne 0 ]]; then
 fi
 if [[ $want_smoke -eq 1 && $suite_rc -eq 0 && $smoke_rc -ne 0 ]]; then
     suite_rc=$smoke_rc
-fi
-if [[ $want_codex -eq 1 ]]; then
-    if [[ $suite_rc -eq 0 && $provision_rc -ne 0 ]]; then
-        suite_rc=$provision_rc
-    fi
-    if [[ $codex_ran -eq 1 && $suite_rc -eq 0 && $codex_rc -ne 0 ]]; then
-        suite_rc=$codex_rc
-    fi
 fi
 exit "$suite_rc"

@@ -91,7 +91,7 @@ public final class VTEmulator: @unchecked Sendable {
         self.alt = VTBuffer(rows: rows, cols: cols)
         self.scrollBottom = rows - 1
         // Only main keeps scrollback; alt-screen consumers (less, vim,
-        // htop, codex full-screen) own their own.
+        // htop and other full-screen tools) own their own.
         self.main.keepScrollback = true
     }
 

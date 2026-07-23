@@ -331,8 +331,8 @@ for suffix in ("-journal", "-wal", "-shm"):
         if suffix == "-journal":
             fail("fakefs meta.db has a rollback journal")
         # A non-empty WAL can contain committed metadata not present in
-        # meta.db. The Codex derivation copies the clean generation and removes
-        # transient sidecars, so accepting such a WAL would silently lose it.
+        # meta.db. Any snapshot/copy that omits transient sidecars would
+        # silently lose it, so it is never accepted as a reusable input.
         if suffix == "-wal" and info.st_size != 0:
             fail("fakefs meta.db has an uncheckpointed non-empty WAL")
 
