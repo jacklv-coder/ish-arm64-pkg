@@ -2,22 +2,23 @@
 
 简体中文｜[English](releasing.en.md)
 
-本文用于维护者发布 XCFramework 与匹配的 Corresponding Source。Stage1 的目标标签是
-`v0.4.0-abi.1`：这是 ABI 过渡 prerelease，**不是稳定 v0.4.0**。执行发布会创建公开
-GitHub Release 和更新默认分支，必须在获得明确发布授权后进行。
+本文用于维护者发布 XCFramework 与匹配的 Corresponding Source。`v0.4.0-abi.1`
+已经公开；当前唯一授权的下一个标签是兼容性维护版本 `v0.4.0-abi.2`。它仍是 ABI
+过渡 prerelease，**不是稳定 v0.4.0**。执行发布会创建公开 GitHub Release 和更新
+默认分支，必须在获得明确发布授权后进行。
 
-## Stage1 发布前后状态
+## `v0.4.0-abi.2` 发布前后状态
 
-### PR 合入后、Release 发布前
+### 维护 PR 合入后、Release 发布前
 
-- `Package.swift` 仍固定已发布的 v0.3.3 URL/checksum；
+- `Package.swift` 仍固定已发布的 `v0.4.0-abi.1` URL/checksum；
 - Swift 源保持 v0.3.3 ABI 兼容，不调用 retain/release；
-- 仓库中已有公开 C ABI 1 的增量实现和内部 wire v4 源码；
-- 没有可供使用方安装的 Stage1 binary。
+- 仓库源码包含已审查的 procfs/address-space 退出同步与 task 发布锁初始化修复；
+- 没有可供使用方安装的 `v0.4.0-abi.2` binary。
 
 这个中间状态是刻意设计的：默认分支不会先暴露一个尚未公开、会返回 404 的资产 URL。
 
-### `v0.4.0-abi.1` 成功发布后
+### `v0.4.0-abi.2` 成功发布后
 
 - release commit 只改 `Package.swift`，固定到新 XCFramework URL/checksum；
 - GitHub prerelease 包含 `libIshKernel.xcframework.zip` 与
@@ -25,6 +26,9 @@ GitHub Release 和更新默认分支，必须在获得明确发布授权后进�
 - 公开 C ABI 仍是 1，内部 wire 仍是 v4；
 - Swift 仍是旧 ABI 兼容层，完整 Swift lifecycle/typed status/Terminal/VT 改造留 Stage2；
 - RootFS 仍不在任何发布资产中。
+
+本维护发布不实现原生 Agent Loop，也不会在 App 内安装或运行 Codex CLI。
+Node.js/npm 仍是 RootFS/guest 包管理流程中的可选包，不是 runtime 的强制依赖。
 
 ## 前置条件
 
@@ -35,7 +39,7 @@ GitHub Release 和更新默认分支，必须在获得明确发布授权后进�
 4. 安装 `git`、`gh`、`swift`、`zip`、`shasum`、`python3`、`curl`、`zig`、Meson、Ninja、
    LLVM/lld 等构建工具。
 5. `third_party/ish` 已初始化，父仓库 gitlink 指向已审查的固定 revision。
-6. 重要 diff 已通过 Luna CR，P1/P2 已清零；CI、iOS 18 真链接、native sanitizer、
+6. 重要 diff 已通过 Codex CR，P1/P2 已清零；CI、iOS 18 真链接、native sanitizer、
    文档与供应链门禁均通过。
 7. 已明确确认本次只发布 runtime/Corresponding Source，不发布 RootFS。
 
@@ -57,7 +61,7 @@ scripts/verify-ios-artifact.sh
 scripts/test-swift-ios.sh --local-binary
 ```
 
-`--manifest-binary` 证明 Stage1 Swift 仍能链接发布前固定的 v0.3.3 binary；
+`--manifest-binary` 证明 Stage1 Swift 仍能链接当前固定的 `v0.4.0-abi.1` binary；
 `--local-binary` 证明相同 Swift 能链接待发布的 ABI 过渡 XCFramework。两者缺一不可。
 
 ## 执行
@@ -65,14 +69,14 @@ scripts/test-swift-ios.sh --local-binary
 确认标签不存在且获得发布授权后：
 
 ```sh
-scripts/release.sh v0.4.0-abi.1
+scripts/release.sh v0.4.0-abi.2
 ```
 
 脚本根据 SemVer 后缀设置 GitHub `prerelease=true`。只有 `v*-abi.*` 标签会附加专用
 中英文说明，明确它不是稳定 v0.4，列出 native lifecycle/retain-release/
 join-soft-halt/wire v4，并说明 Swift 和 RootFS 边界。
-除了 SemVer 检查，Stage1 版本策略还会硬性拒绝除 `v0.4.0-abi.1` 以外的任何标签。
-因此即使误输入 `v0.4.0`，也会在任何 tag、draft 或资产写入前失败。
+除了 SemVer 检查，Stage1 版本策略还会硬性拒绝除 `v0.4.0-abi.2` 以外的任何标签。
+因此重用 `v0.4.0-abi.1` 或误输入 `v0.4.0`，都会在任何 tag、draft 或资产写入前失败。
 
 不要用 `v0.4.0` 代替过渡标签。稳定标签必须等 Stage2 合入、迁移与回归完成后另行决定。
 
@@ -112,9 +116,9 @@ RootFS 既不是 binary，也不是 Corresponding Source。脚本不会读取或
 ## 发布后验收
 
 ```sh
-gh release view v0.4.0-abi.1 --repo jacklv-coder/ish-arm64-pkg
+gh release view v0.4.0-abi.2 --repo jacklv-coder/ish-arm64-pkg
 git fetch origin --tags
-git show v0.4.0-abi.1:Package.swift
+git show v0.4.0-abi.2:Package.swift
 git pull --ff-only origin main
 scripts/test-swift-ios.sh --manifest-binary
 ```
@@ -143,8 +147,9 @@ scripts/test-swift-ios.sh --manifest-binary
 任何恢复都不得强推覆盖未知对象，也不得按名称盲删 tag/draft。保存脚本打印的 staging
 路径、Release id、commit、tag object OID 与 digest，再进行人工处理。
 
-## Stage2 进入条件
+## PocketRoot 升级条件
 
-只有 `v0.4.0-abi.1` 公开资产、manifest 更新和发布后真链接全部通过，Stage2 才能合入
-Swift retain/release lifecycle、typed status 与 Terminal/VT 改造。Stage2 仍需独立 CR、
-测试、文档和发布决策；ABI 过渡 prerelease 本身不能宣称稳定 v0.4 已完成。
+只有 `v0.4.0-abi.2` 公开资产、manifest 更新和发布后真链接全部通过，PocketRoot 才能
+把依赖从 `v0.4.0-abi.1` 更新到该维护版本并重跑 Xcode 16/iOS 18 门禁。Stage2 与
+原生 Agent Loop 均不在本次发布范围内；未来启用时仍需独立计划、CR、测试、文档和
+发布决策。

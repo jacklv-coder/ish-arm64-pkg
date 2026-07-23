@@ -16,24 +16,25 @@ wire v4, and release supply chain.
 | Native integration | `procfs_test`, `ishembed_smoke` | fakefs, spawn, procfs, general command path | RootFS provenance/license is trustworthy; compatibility with a particular user tool |
 | Sanitizers | ASan/UBSan and TSan where applicable | bounds, UAF, undefined behavior, and races on covered paths | every schedule is defect-free |
 | RootFS-free Swift | instance/session gates, shutdown retry, public API smoke | oneshot/session leases prevent old-ABI UAF, failure keeps the handle, old public signatures compile | every C call is cancellable or close is always bounded |
-| Swift manifest real link | `test-swift-ios.sh --manifest-binary` | Stage1 Swift still links the pre-publication v0.3.3 binary | new native symbols are public |
-| Swift local real link | `test-swift-ios.sh --local-binary` | the same Swift links the transition XCFramework | GitHub assets are published |
+| Swift manifest real link | `test-swift-ios.sh --manifest-binary` | Stage1 Swift links the current `v0.4.0-abi.1` binary | `v0.4.0-abi.2` fixes are public |
+| Swift local real link | `test-swift-ios.sh --local-binary` | the same Swift links the maintenance XCFramework | GitHub assets are published |
 | XCFramework | `build-ios.sh` plus symbol/final-link checks | device/simulator arm64, minimum iOS 18, required symbols | product app behavior |
 | Docs/scripts | positive/negative docs gates, shell syntax, policy tests | bilingual links, diagnostics, release-notes/version/tag/source policy | documentation equals implementation |
 
 ## Confirm the Stage1 state first
 
-Before publication, all of these should be true:
+Before `v0.4.0-abi.2` publication, all of these should be true:
 
 - `ISH_EMBED_ABI_VERSION` is 1;
 - `ISH_PROTO_VERSION` is 4;
 - Swift source does not call `ish_embed_session_retain/release`;
-- `Package.swift` still pins v0.3.3;
+- `Package.swift` still pins the public `v0.4.0-abi.1`;
 - the locally built XCFramework exports retain/release and required join/soft-halt symbols;
 - RootFS content is absent from Git diff, XCFramework, source archive, and Release manifest.
 
-Only after publication should “manifest pins `v0.4.0-abi.1`” become the expected
-state. Do not apply the post-publication expectation to a correct pre-publication tree.
+Only after publication should “manifest pins `v0.4.0-abi.2`” become the expected
+state. Do not apply that expectation to a correct pre-publication tree that
+still references the verified `v0.4.0-abi.1`.
 
 ## Fast metadata and script gates
 
@@ -329,12 +330,12 @@ rejects a false success where every test was skipped.
 Stage1 Swift is an old-ABI-compatible layer. Do not add assertions here that
 call native retain/release or depend on typed status and new Terminal/VT
 behavior. Complete borrowing/cancellation/typed-lifecycle tests arrive with
-Stage2. After the transition Release, run `--manifest-binary` again to prove the
+Stage2. After the maintenance Release, run `--manifest-binary` again to prove the
 updated manifest real-links from the public URL.
 
 ## Review and commit gate
 
-Before an important push and before PR merge, GPT-5.6 Luna reviews:
+Before an important push and before PR merge, run Codex CR to review:
 
 - whether the diff stays within Stage1 native ABI scope;
 - session/instance concurrency, references, shutdown, and error paths;
