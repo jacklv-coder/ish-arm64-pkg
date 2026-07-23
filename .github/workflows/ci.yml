@@ -24,7 +24,15 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          submodules: true
+          submodules: false
+
+      - name: Check out pinned iSH source
+        run: |
+          git submodule sync -- third_party/ish
+          git -c 'url.https://github.com/.insteadOf=ssh://git@ssh.github.com:443/' \
+            submodule update --init --checkout -- third_party/ish
+          test "$(git -C third_party/ish rev-parse HEAD)" = \
+            "$(git ls-tree HEAD third_party/ish | awk '{print $3}')"
 
       - name: Install native build tools
         run: brew install meson ninja lld zig

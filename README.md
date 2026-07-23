@@ -171,7 +171,8 @@ wire v4 要求两端精确匹配，增加 `SESSION_CLOSE`；wire 版本不等于
 
 ```sh
 brew install meson ninja sqlite libarchive llvm lld zig
-git submodule update --init
+git submodule sync -- third_party/ish
+git submodule update --init --checkout -- third_party/ish
 PATH="/opt/homebrew/opt/llvm/bin:/opt/homebrew/opt/lld/bin:$PATH" \
   scripts/build-ios.sh
 scripts/build-rootfs.sh --print-inputs
@@ -183,8 +184,9 @@ scripts/test-swift-ios.sh --local-binary
 scripts/check-docs.sh
 ```
 
-iSH 内部的嵌套子模块不是本 package 构建前置；上述命令只初始化本仓库固定的
-`third_party/ish`，避免隐式抓取未参与构建的其他仓库。
+iSH 内部的嵌套子模块不是本 package 构建前置；上述命令先把已有 checkout 的缓存 URL
+同步到 `.gitmodules`，再只初始化本仓库固定的 `third_party/ish`，避免隐式抓取未参与
+构建的其他仓库。
 
 干净检出第一次运行 host tests 时，会使用 `scripts/alpine-rootfs-pin.sh` 中经过审阅的
 Alpine 版本、架构和 SHA-256，并从脚本固定的官方下载地址自动准备开发 RootFS。

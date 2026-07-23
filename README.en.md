@@ -204,7 +204,8 @@ an English mirror.
 
 ```sh
 brew install meson ninja sqlite libarchive llvm lld zig
-git submodule update --init
+git submodule sync -- third_party/ish
+git submodule update --init --checkout -- third_party/ish
 PATH="/opt/homebrew/opt/llvm/bin:/opt/homebrew/opt/lld/bin:$PATH" \
   scripts/build-ios.sh
 scripts/build-rootfs.sh --print-inputs
@@ -216,9 +217,11 @@ scripts/test-swift-ios.sh --local-binary
 scripts/check-docs.sh
 ```
 
-Nested iSH submodules are not prerequisites for this package build. The command
-above initializes only this repository's pinned `third_party/ish` checkout and
-does not implicitly fetch unrelated repositories that are not build inputs.
+Nested iSH submodules are not prerequisites for this package build. The
+commands above first synchronize an existing checkout's cached URL with
+`.gitmodules`, then initialize only this repository's pinned `third_party/ish`
+checkout without implicitly fetching unrelated repositories that are not build
+inputs.
 
 On the first host-test run in a clean checkout, the reviewed Alpine version,
 architecture, and SHA-256 in `scripts/alpine-rootfs-pin.sh`, together with the

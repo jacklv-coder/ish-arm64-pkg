@@ -10,12 +10,17 @@
 
 ```sh
 git rev-parse HEAD
+git submodule sync -- third_party/ish
+git submodule update --init --checkout -- third_party/ish
 git submodule status third_party/ish
 rg 'ISH_EMBED_ABI_VERSION' include/ishembed.h
 rg 'ISH_PROTO_VERSION' protocol/proto.h
 rg -n 'url:|checksum:' Package.swift
 git status --short
 ```
+
+`git submodule sync` 会把旧 checkout 缓存在 `.git/config` 中的子模块 URL 更新为当前
+`.gitmodules` 的 SSH-over-443 地址；修改 `.gitmodules` 本身不会自动更新这份缓存。
 
 同时记录 Xcode/Swift/Zig 版本、运行平台、XCFramework 来源与 checksum，以及 RootFS 的
 来源、大小和 SHA-256。没有这组信息，后续日志可能来自不同状态。
