@@ -307,9 +307,10 @@ RootFS-independent tests in `Tests/IshEmbedTests` cover:
 - the instance gate serializing boot/shutdown, an oneshot or live-session lease
   making shutdown busy before old-native entry, and spawn retaining its lease
   through completion of native session close;
-- shutdown failure, including the busy-status case, retaining the same handle
-  for cleanup and retry, while success consumes the process's only lifecycle
-  and rejects a later boot before native entry;
+- shutdown busy restoring the same running handle, timeout and other terminal
+  failures quarantining ordinary calls while retaining shutdown cleanup retry,
+  and success consuming the process's only lifecycle and rejecting a later boot
+  before native entry;
 - oneshot/read rejecting NaN or infinite timeouts before native entry, and a
   positive sub-millisecond oneshot timeout converting to at least 1 ms;
 - the session gate detaching first, rejecting new calls, and waiting for an

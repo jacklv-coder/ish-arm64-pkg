@@ -269,10 +269,11 @@ calls alone to Stage1 breaks old-binary linkage.
 The Stage1 Swift instance gate holds a lease for each oneshot and retains a
 spawn lease until the session's native close completes. Any lease makes
 shutdown immediately busy before entering v0.3.3 native code; overlapping boot
-or shutdown transitions are also rejected. Native shutdown failure preserves
-the handle for retry. This prevents old-ABI UAF but does not cancel a call, so
-await it before retrying. The transition native runtime can likewise return busy
-or the corresponding error for this state.
+or shutdown transitions are also rejected. Native `BUSY` preserves the running
+handle for retry; timeout and other terminal failures quarantine ordinary calls
+but retain shutdown cleanup retry. This prevents old-ABI UAF but does not cancel
+a call, so await it before retrying. The transition native runtime can likewise
+return busy or the corresponding error for this state.
 
 Never boot again in the same process after successful shutdown. Process-global
 and TLS iSH state makes one lifecycle an explicit architecture constraint.

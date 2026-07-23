@@ -76,7 +76,8 @@ Swift 对象不是另一套 runtime。它们包装 C handle；C 层管理线程�
 - call gate 防止 close/call UAF，但不会取消永久不返回的非 read C 调用；调用方仍应先
   停止并等待任务。
 - shutdown 只在所有 session 已关闭、spawn/runOneshot 等活动 instance 调用已退出后成功；
-  Swift shutdown 失败保留 handle 供重试，成功后进入 consumed 终态并拒绝二次 boot。
+  Swift 对 `BUSY` 恢复运行态，其他失败隔离普通调用但保留 shutdown 清理重试，成功后进入
+  consumed 终态并拒绝二次 boot。
 - host/supervisor wire 必须同为 v4，不做跨版本协商。
 - 默认 supervisor 安装前校验实际内嵌 bytes 的 SHA-256 与同一构建元数据/内容寻址路径；
   自定义路径绕过该默认门禁。摘要一致不等于数字签名或来源认证。

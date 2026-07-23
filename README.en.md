@@ -32,8 +32,9 @@ deliberately does not call the new retain/release entry points. A
 v0.3.3-compatible Swift call gate protects both instance and session handles. A
 oneshot holds an instance lease for the native call; spawn transfers that same
 lease into the session until native close completes. Shutdown returns busy for
-an active call/session without entering the old binary's free path, and a failed
-shutdown preserves its handle for retry. Complete native
+an active call/session without entering the old binary's free path. `BUSY`
+restores the running handle; other failures preserve it only for shutdown
+cleanup retry. Complete native
 borrowing/cancellation, typed statuses, Terminal callback queues, and VT parser
 changes belong to **Stage2** and are not delivered here.
 
@@ -171,8 +172,9 @@ the session gate waits for admitted C calls but cannot cancel a permanently
 blocked non-read call. The instance gate keeps a lease for each oneshot and live
 session, so `shutdown()` immediately throws `ISH_ERR_BUSY` instead of invoking
 v0.3.3 native free. Stop and await spawn/runOneshot, close all sessions, and then
-call `try instance.shutdown()`; a failure keeps the instance handle for cleanup
-and retry. Stage1 still exposes
+call `try instance.shutdown()`; `BUSY` can be retried after task cleanup, while
+other failures quarantine ordinary calls but retain shutdown cleanup retry.
+Stage1 still exposes
 `IshError.raw(Int32, String)`; typed status mapping is deferred to Stage2.
 
 ## C ABI and wire protocol

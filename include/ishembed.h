@@ -217,6 +217,11 @@ int ish_embed_session_read(ish_embed_session_t *s,
 int ish_embed_session_write(ish_embed_session_t *s,
                             const uint8_t *buf, size_t len);
 
+/* Outbound operations on one retained session are synchronized with close. A
+ * successful write, signal, resize, terminate, or stdin close is completely
+ * ordered before SESSION_CLOSE; calls that overlap close either finish first
+ * or fail without reporting a later control frame as delivered. */
+
 /* Send a Unix signal to the tracked command's process group. signum is the
  * standard Linux signal number (SIGINT=2, SIGTERM=15, ...). For a TTY shell,
  * this direct operation deliberately does not retarget a foreground job;
@@ -252,7 +257,9 @@ void ish_embed_session_close(ish_embed_session_t *s);
 /* Politely shut down the supervisor and join the kernel pthread. All sessions
  * must be closed and all instance calls must have returned first, otherwise
  * ISH_ERR_BUSY is returned. After successful shutdown, the IshInstance is
- * invalidated; you cannot boot another one in this process. */
+ * invalidated; you cannot boot another one in this process. ISH_ERR_TIMEOUT or
+ * another terminal cleanup error leaves ordinary instance admission closed but
+ * preserves the handle so the caller can retry shutdown. */
 int ish_embed_shutdown(ish_embed_instance_t *inst, uint32_t grace_ms);
 
 /* Legacy compatibility entry point. It validates a live instance and a

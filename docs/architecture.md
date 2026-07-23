@@ -175,8 +175,10 @@ idle/booting/running/shutting-down，并为每次 oneshot 持有调用 lease。s
 零计数窗口，直接把 lease 转交给 `IshSession`；只有 native session close 返回后才释放。
 shutdown 会先原子关闭新调用入口：只要仍有 oneshot 或 session lease，就立即返回
 `ISH_ERR_BUSY` 而不进入 v0.3.3 native shutdown；没有 lease 时才独占 shutdown。native
-失败会恢复同一 handle 和 running 状态，成功才清空 handle。这样 boot/shutdown、两个
-shutdown caller 以及 shutdown/call 均不会交错释放旧 ABI handle。
+返回 `ISH_ERR_BUSY` 会恢复同一 handle 和 running 状态，成功才清空 handle；其他
+shutdown 失败会隔离 handle，拒绝普通调用和再次 boot，但仍允许重试 shutdown 完成
+native 清理。这样 boot/shutdown、两个 shutdown caller 以及 shutdown/call 均不会交错
+释放旧 ABI handle。
 
 ## 线程与反压
 
@@ -263,8 +265,8 @@ chroot 只隔离文件系统视图。所有 session 共享同一个 iSH kernel�
 Stage1 Swift 的 instance gate 还在进入 native 前执行旧 ABI 兼容保护：oneshot 和每个存活
 session 都持有 lease；有 lease 时立即 busy，并发 boot/shutdown 也被状态机拒绝。因此
 v0.3.3 shutdown 不会释放已经被 spawn/runOneshot/session 使用的 instance。只有 native
-返回成功时才清除 Swift handle；任何失败（包括 busy）都恢复原 handle 与 running 状态，
-调用方可在关闭 session/等待任务后重试。进入成功 shutdown 后，
+返回成功时才清除 Swift handle；busy 恢复原 handle 与 running 状态，timeout 等终态失败
+进入 quarantine，拒绝普通调用但允许 shutdown 清理重试。进入成功 shutdown 后，
 runtime 请求 supervisor 退出、关闭/排空 pumps、启用 iSH soft-halt，等待并 join kernel
 pthread，最后释放 instance。
 

@@ -254,8 +254,9 @@ XCFramework 字节。
 
 - instance gate 串行化 boot/shutdown，oneshot lease 或存活 session 使 shutdown 在进入旧
   native 前立即 busy；spawn lease 直到 native session close 完成才释放；
-- shutdown 失败（包括 busy 对应状态）保留同一 handle，允许清理后重试；成功 shutdown
-  消耗进程唯一 lifecycle，后续 boot 在进入 native 前即被拒绝；
+- shutdown 的 busy 状态恢复同一 running handle；timeout 等终态失败隔离普通调用但允许
+  shutdown 清理重试；成功 shutdown 消耗进程唯一 lifecycle，后续 boot 在进入 native 前
+  即被拒绝；
 - oneshot/read 的 NaN/无穷 timeout 在进入 native 前返回 invalid-argument，正的亚毫秒
   oneshot timeout 至少转换为 1 ms；
 - session gate 先 detach、拒绝新调用，并等待已进入调用结束后才执行 native close；

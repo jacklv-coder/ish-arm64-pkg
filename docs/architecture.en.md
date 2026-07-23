@@ -230,10 +230,11 @@ each oneshot. A successful spawn transfers the same lease into `IshSession`
 without a zero-count window; it is released only after native session close
 returns. Shutdown first atomically closes admission. Any oneshot/session lease
 causes immediate `ISH_ERR_BUSY` without entering v0.3.3 native shutdown; with no
-lease, one caller owns the transition. Native failure restores the same handle
-and running state, while success alone clears it. Boot/shutdown, two shutdown
-callers, and shutdown/call therefore cannot interleave a free of the old-ABI
-handle.
+lease, one caller owns the transition. Native `BUSY` restores the same handle
+and running state; timeout or another terminal cleanup error quarantines
+ordinary calls but permits shutdown retry. Success alone clears the handle.
+Boot/shutdown, two shutdown callers, and shutdown/call therefore cannot
+interleave a free of the old-ABI handle.
 
 ## Threads and backpressure
 
@@ -344,9 +345,11 @@ call exists. Before native entry, the Stage1 Swift instance gate adds the old-AB
 protection: every oneshot and live session holds a lease, an existing lease
 returns busy immediately, and the state machine also rejects overlapping boot or
 shutdown. v0.3.3 shutdown therefore cannot free an instance already used by
-spawn/runOneshot/session. Swift clears the handle only on success; every failure,
-including busy, restores the same handle and running state for retry after
-sessions/tasks are cleaned up. Once admitted, native shutdown asks the supervisor to exit, closes
+spawn/runOneshot/session. Swift clears the handle only on success.
+`ISH_ERR_BUSY` restores the same handle and running state for retry after
+sessions/tasks are cleaned up. Any other native shutdown failure quarantines the
+handle from ordinary calls and boot, while allowing shutdown to be retried so
+native cleanup can finish. Once admitted, native shutdown asks the supervisor to exit, closes
 and drains pumps, enables iSH soft-halt, waits for and joins the kernel pthread,
 then releases the instance.
 

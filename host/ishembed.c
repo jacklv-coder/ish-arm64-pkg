@@ -124,6 +124,7 @@ struct ish_embed_session {
     size_t                queued_bytes;
     size_t                queued_frames;
     unsigned              references; /* one owner plus explicit borrows        */
+    unsigned              active_controls;
     int                   owner_released;
     int                   linked;
     /* Serializes complete multi-frame stdin writes with stdin close/session
@@ -1785,53 +1786,52 @@ int ish_embed_session_write(ish_embed_session_t *s,
     return ISH_OK;
 }
 
-int ish_embed_session_signal(ish_embed_session_t *s, int signum) {
-    if (!s) return ISH_ERR_INVALID_ARG;
+static int send_session_control(ish_embed_session_t *s, uint8_t type,
+                                const void *payload, uint32_t payload_len) {
     pthread_mutex_lock(&s->lock);
     if (s->closing) {
         pthread_mutex_unlock(&s->lock);
         return ISH_ERR_NO_SESSION;
     }
+    s->active_controls++;
     ish_embed_instance_t *inst = s->inst;
     uint32_t sid = s->id;
     pthread_mutex_unlock(&s->lock);
+#ifdef ISH_EMBED_TESTING
+    extern void ish_embed_test_after_session_control_admission(uint8_t type);
+    ish_embed_test_after_session_control_admission(type);
+#endif
+    int rc = send_frame(inst, type, 0, sid, payload, payload_len);
+    pthread_mutex_lock(&s->lock);
+    s->active_controls--;
+    pthread_cond_broadcast(&s->cond);
+    pthread_mutex_unlock(&s->lock);
+    return rc;
+}
+
+int ish_embed_session_signal(ish_embed_session_t *s, int signum) {
+    if (!s) return ISH_ERR_INVALID_ARG;
     uint8_t buf[4];
     ish_proto_put_i32(buf, signum);
-    return send_frame(inst, ISH_FT_SIGNAL, 0, sid, buf, sizeof(buf));
+    return send_session_control(s, ISH_FT_SIGNAL, buf, sizeof(buf));
 }
 
 int ish_embed_session_resize(ish_embed_session_t *s,
                               uint16_t rows, uint16_t cols,
                               uint16_t xpixel, uint16_t ypixel) {
     if (!s) return ISH_ERR_INVALID_ARG;
-    pthread_mutex_lock(&s->lock);
-    if (s->closing) {
-        pthread_mutex_unlock(&s->lock);
-        return ISH_ERR_NO_SESSION;
-    }
-    ish_embed_instance_t *inst = s->inst;
-    uint32_t sid = s->id;
-    pthread_mutex_unlock(&s->lock);
     uint8_t buf[8];
     ish_proto_put_u16(buf + 0, rows);
     ish_proto_put_u16(buf + 2, cols);
     ish_proto_put_u16(buf + 4, xpixel);
     ish_proto_put_u16(buf + 6, ypixel);
-    return send_frame(inst, ISH_FT_RESIZE, 0, sid, buf, sizeof(buf));
+    return send_session_control(s, ISH_FT_RESIZE, buf, sizeof(buf));
 }
 
 int ish_embed_session_terminate(ish_embed_session_t *s, uint32_t grace_ms) {
     if (!s) return ISH_ERR_INVALID_ARG;
     (void)grace_ms; /* supervisor uses its own ~1.5s grace */
-    pthread_mutex_lock(&s->lock);
-    if (s->closing) {
-        pthread_mutex_unlock(&s->lock);
-        return ISH_ERR_NO_SESSION;
-    }
-    ish_embed_instance_t *inst = s->inst;
-    uint32_t sid = s->id;
-    pthread_mutex_unlock(&s->lock);
-    return send_frame(inst, ISH_FT_TERMINATE, 0, sid, NULL, 0);
+    return send_session_control(s, ISH_FT_TERMINATE, NULL, 0);
 }
 
 int ish_embed_session_close_stdin(ish_embed_session_t *s) {
@@ -1869,9 +1869,10 @@ void ish_embed_session_close(ish_embed_session_t *s) {
     clock_gettime(CLOCK_REALTIME, &deadline);
     deadline.tv_sec += 1;
 
-    /* Publish closing without waiting behind a synchronous stdin sender. New
-     * stdin calls take stdin_lock and then observe closing; an existing owner of
-     * stdin_lock is handled below by the runtime-wide EOF fallback. */
+    /* Publish closing without waiting behind synchronous senders. New control
+     * calls observe closing under s->lock; an admitted control is counted until
+     * its frame completes. New stdin calls take stdin_lock and then observe
+     * closing; an existing stdin owner is handled by the EOF fallback below. */
     pthread_mutex_lock(&s->lock);
     if (s->closing || s->owner_released) {
         pthread_mutex_unlock(&s->lock);
@@ -1879,6 +1880,7 @@ void ish_embed_session_close(ish_embed_session_t *s) {
     }
     s->closing = 1;
     int exited = s->guest_exited;
+    int controls_idle = s->active_controls == 0;
     ish_embed_instance_t *inst = s->inst;
     uint32_t sid = s->id;
     pthread_cond_broadcast(&s->cond);
@@ -1889,11 +1891,13 @@ void ish_embed_session_close(ish_embed_session_t *s) {
      * reserved lifecycle budget: a full/stalled ordinary queue cannot block
      * this void API before its one-second reap deadline begins. Acquiring
      * stdin_lock proves every earlier multi-frame write/EOF completed before
-     * SESSION_CLOSE; failure to acquire it must stop the whole control path
-     * instead of placing frames out of order. */
+     * SESSION_CLOSE. The active-controls snapshot was taken atomically with
+     * publishing closing, so it also proves no signal/resize/terminate can be
+     * admitted across this point. Either failed condition must stop the whole
+     * control path instead of placing frames out of order. */
     int stdin_serialized = pthread_mutex_trylock(&s->stdin_lock) == 0;
     int close_status = ISH_OK;
-    if (stdin_serialized) {
+    if (stdin_serialized && controls_idle) {
         pthread_mutex_lock(&s->lock);
         exited = s->guest_exited;
         pthread_mutex_unlock(&s->lock);
@@ -1902,10 +1906,12 @@ void ish_embed_session_close(ish_embed_session_t *s) {
                 inst, ISH_FT_SESSION_CLOSE, 0, sid, NULL, 0);
         }
         pthread_mutex_unlock(&s->stdin_lock);
+    } else if (stdin_serialized) {
+        pthread_mutex_unlock(&s->stdin_lock);
     }
 
     pthread_mutex_lock(&s->lock);
-    if (stdin_serialized && close_status == ISH_OK) {
+    if (stdin_serialized && controls_idle && close_status == ISH_OK) {
         while (close_status == ISH_OK && !s->guest_exited &&
                !atomic_load(&inst->shutting_down) &&
                now_ms() < close_deadline_ms) {
@@ -1920,7 +1926,7 @@ void ish_embed_session_close(ish_embed_session_t *s) {
      * otherwise live instance. A concurrent stdin owner, admission failure,
      * writer failure, or missing reap acknowledgement converts the whole
      * runtime to its protocol-independent EOF shutdown path. */
-    if (!stdin_serialized || !exited) {
+    if (!stdin_serialized || !controls_idle || !exited) {
         atomic_store(&inst->shutting_down, 1);
         close_control_pipe(inst);
     }

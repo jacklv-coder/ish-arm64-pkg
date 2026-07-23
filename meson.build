@@ -215,6 +215,12 @@ test('lifecycle_control_same_session_close', lifecycle_test,
     args: ['control-same-session-close'], timeout: 10)
 test('lifecycle_control_exited_same_session_close', lifecycle_test,
     args: ['control-exited-same-session-close'], timeout: 10)
+test('lifecycle_signal_close_order', lifecycle_test,
+    args: ['signal-close-order'], timeout: 10)
+test('lifecycle_resize_close_order', lifecycle_test,
+    args: ['resize-close-order'], timeout: 10)
+test('lifecycle_terminate_close_order', lifecycle_test,
+    args: ['terminate-close-order'], timeout: 10)
 test('lifecycle_control_critical_oneshot', lifecycle_test,
     args: ['control-critical-oneshot'], timeout: 10)
 test('lifecycle_control_preblocked_oneshot', lifecycle_test,

@@ -106,6 +106,7 @@ private let ishErrInvalidArg: Int32     = ISH_ERR_INVALID_ARG.rawValue
 private let ishErrInternal: Int32       = ISH_ERR_INTERNAL.rawValue
 private let ishErrProtocol: Int32       = ISH_ERR_PROTOCOL.rawValue
 private let ishErrTimeout: Int32        = ISH_ERR_TIMEOUT.rawValue
+private let ishErrBusy: Int32           = ISH_ERR_BUSY.rawValue
 private let ishErrBoot: Int32           = ISH_ERR_BOOT.rawValue
 
 // Mirrors `#define ISH_STREAM_*` in ishembed.h. Plain `#define` macros
@@ -367,6 +368,7 @@ final class IshInstanceCallGate: @unchecked Sendable {
         case booting
         case running(OpaquePointer)
         case shuttingDown(OpaquePointer)
+        case quarantined(OpaquePointer)
         case consumed
     }
 
@@ -380,7 +382,7 @@ final class IshInstanceCallGate: @unchecked Sendable {
         switch state {
         case .running, .shuttingDown:
             return true
-        case .idle, .booting, .consumed:
+        case .idle, .booting, .quarantined, .consumed:
             return false
         }
     }
@@ -394,9 +396,9 @@ final class IshInstanceCallGate: @unchecked Sendable {
             state = .booting
         case .running:
             throw IshError.from(ishErrAlreadyBooted)
-        case .consumed:
-            // A successful shutdown consumes the only lifecycle supported by
-            // iSH's process-global/TLS runtime. Never re-enter native boot.
+        case .quarantined, .consumed:
+            // A shutdown attempt consumes boot admission for the only
+            // lifecycle supported by iSH's process-global/TLS runtime.
             throw IshError.from(ishErrAlreadyBooted)
         case .booting, .shuttingDown:
             throw IshError.busy()
@@ -426,7 +428,7 @@ final class IshInstanceCallGate: @unchecked Sendable {
         case .running(let raw):
             activeLeases += 1
             return IshInstanceCallLease(raw: raw, owner: self)
-        case .idle, .consumed:
+        case .idle, .quarantined, .consumed:
             throw IshError.from(ishErrNotRunning)
         case .booting, .shuttingDown:
             throw IshError.busy()
@@ -445,6 +447,11 @@ final class IshInstanceCallGate: @unchecked Sendable {
             return .notRunning
         case .booting, .shuttingDown:
             throw IshError.busy()
+        case .quarantined(let raw):
+            // Native shutdown already closed ordinary admission, but it still
+            // owns the allocation and threads until a retry completes cleanup.
+            state = .shuttingDown(raw)
+            return .ready(raw)
         case .running(let raw):
             state = .shuttingDown(raw)
             guard activeLeases == 0 else {
@@ -455,8 +462,10 @@ final class IshInstanceCallGate: @unchecked Sendable {
         }
     }
 
-    /// Commit native destruction only on success. A failed native shutdown
-    /// leaves the same handle available for calls and a later retry.
+    /// Commit native destruction on success. Busy means native shutdown never
+    /// closed admission, so the running handle can be restored. Every other
+    /// failure quarantines ordinary calls while retaining the handle solely for
+    /// a later shutdown retry that can finish native thread cleanup.
     func finishShutdown(attempted: OpaquePointer, result: Int32) {
         lock.lock()
         guard case .shuttingDown(let current) = state,
@@ -464,7 +473,13 @@ final class IshInstanceCallGate: @unchecked Sendable {
             lock.unlock()
             preconditionFailure("finishShutdown without its reserved transition")
         }
-        state = result == ishOK ? .consumed : .running(current)
+        if result == ishOK {
+            state = .consumed
+        } else if result == ishErrBusy {
+            state = .running(current)
+        } else {
+            state = .quarantined(current)
+        }
         lock.unlock()
     }
 

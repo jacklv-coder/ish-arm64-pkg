@@ -338,6 +338,35 @@ final class IshEmbedTests: XCTestCase {
         XCTAssertEqual(counts.close, 1)
     }
 
+    func testNativeShutdownTimeoutQuarantinesHandle() throws {
+        let native = LifecycleNativeHarness(shutdownResults: [-12, 0])
+        let instance = IshInstance(nativeCalls: native.nativeCalls())
+        try instance.boot(.init(rootfsPath: "/unused-test-rootfs"))
+
+        XCTAssertThrowsError(try instance.shutdown()) {
+            XCTAssertEqual(ishErrorCode($0), -12)
+        }
+        XCTAssertFalse(instance.isRunning)
+        XCTAssertThrowsError(try instance.runOneshot(
+            .init(argv: ["/bin/true"]))) {
+            XCTAssertEqual(ishErrorCode($0), -9)
+        }
+        XCTAssertThrowsError(
+            try instance.boot(.init(rootfsPath: "/unused-test-rootfs"))) {
+            XCTAssertEqual(ishErrorCode($0), -10)
+        }
+        XCTAssertNoThrow(try instance.shutdown(),
+                         "a quarantined timeout must permit cleanup retry")
+        XCTAssertNoThrow(try instance.shutdown(),
+                         "shutdown is idempotent after retry succeeds")
+        let counts = native.counts()
+        XCTAssertEqual(counts.boot, 1)
+        XCTAssertEqual(counts.shutdown, 2,
+                       "timeout must preserve native shutdown cleanup")
+        XCTAssertEqual(counts.oneshot, 0,
+                       "timeout must not re-admit the native handle")
+    }
+
     func testSuccessfulShutdownConsumesProductionInstanceLifecycle() throws {
         let native = LifecycleNativeHarness()
         let instance = IshInstance(nativeCalls: native.nativeCalls())

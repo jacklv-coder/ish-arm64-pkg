@@ -51,6 +51,7 @@ enum fake_mode {
     FAKE_CONTROL_CRITICAL_ONESHOT,
     FAKE_CONTROL_SAME_SESSION_CLOSE,
     FAKE_CONTROL_EXITED_SAME_SESSION_CLOSE,
+    FAKE_SESSION_CONTROL_CLOSE_RACE,
     FAKE_CONTROL_PREBLOCKED_ONESHOT,
     FAKE_CONTROL_BYTE_RESERVE,
     FAKE_SUPERVISOR_ERROR,
@@ -101,7 +102,11 @@ static int g_active_call_waiting;
 static int g_release_active_call;
 static int g_terminate_count;
 static int g_signal_count;
+static int g_resize_count;
 static int g_session_close_count;
+static uint8_t g_session_control_race_type;
+static int g_session_control_admitted;
+static int g_release_session_control;
 static int g_log_sink_fd = -1;
 static int g_log_sink_read_fd = -1;
 static int g_log_write_started;
@@ -519,10 +524,12 @@ static void *fake_kernel_main(void *unused) {
             pthread_cond_broadcast(&g_fake_cond);
             pthread_mutex_unlock(&g_fake_lock);
             fake_emit_exit(sid, 0, 0);
-        } else if (type == ISH_FT_SIGNAL || type == ISH_FT_TERMINATE ||
+        } else if (type == ISH_FT_SIGNAL || type == ISH_FT_RESIZE ||
+                   type == ISH_FT_TERMINATE ||
                    type == ISH_FT_SESSION_CLOSE) {
             pthread_mutex_lock(&g_fake_lock);
             if (type == ISH_FT_SIGNAL) g_signal_count++;
+            else if (type == ISH_FT_RESIZE) g_resize_count++;
             else if (type == ISH_FT_TERMINATE) g_terminate_count++;
             else g_session_close_count++;
             if (g_mode == FAKE_BACKLOG_FRAMES &&
@@ -531,7 +538,7 @@ static void *fake_kernel_main(void *unused) {
             pthread_cond_broadcast(&g_fake_cond);
             pthread_mutex_unlock(&g_fake_lock);
             if (type == ISH_FT_SESSION_CLOSE ||
-                g_mode != FAKE_ONESHOT_HANG)
+                (type != ISH_FT_RESIZE && g_mode != FAKE_ONESHOT_HANG))
                 fake_emit_exit(sid, 137, 9);
         } else if (type == ISH_FT_SHUTDOWN) {
             if (g_mode == FAKE_DOUBLE_SHUTDOWN) {
@@ -611,6 +618,18 @@ void ish_embed_test_after_instance_call_begin(void) {
     g_active_call_waiting = 1;
     pthread_cond_broadcast(&g_fake_cond);
     while (!g_release_active_call)
+        pthread_cond_wait(&g_fake_cond, &g_fake_lock);
+    pthread_mutex_unlock(&g_fake_lock);
+}
+
+void ish_embed_test_after_session_control_admission(uint8_t type) {
+    if (g_mode != FAKE_SESSION_CONTROL_CLOSE_RACE ||
+        type != g_session_control_race_type)
+        return;
+    pthread_mutex_lock(&g_fake_lock);
+    g_session_control_admitted = 1;
+    pthread_cond_broadcast(&g_fake_cond);
+    while (!g_release_session_control)
         pthread_cond_wait(&g_fake_cond, &g_fake_lock);
     pthread_mutex_unlock(&g_fake_lock);
 }
@@ -1366,6 +1385,122 @@ static int test_control_same_session_close_bound(void) {
 static int test_control_exited_same_session_close_bound(void) {
     return run_control_same_session_close_bound(
         FAKE_CONTROL_EXITED_SAME_SESSION_CLOSE, 1);
+}
+
+enum retained_control_kind {
+    RETAINED_CONTROL_SIGNAL,
+    RETAINED_CONTROL_RESIZE,
+    RETAINED_CONTROL_TERMINATE,
+};
+
+struct retained_control_call {
+    ish_embed_session_t *session;
+    enum retained_control_kind kind;
+    atomic_int done;
+    int rc;
+};
+
+static void *retained_control_thread(void *raw) {
+    struct retained_control_call *call = raw;
+    if (call->kind == RETAINED_CONTROL_SIGNAL)
+        call->rc = ish_embed_session_signal(call->session, 2);
+    else if (call->kind == RETAINED_CONTROL_RESIZE)
+        call->rc = ish_embed_session_resize(call->session, 24, 80, 0, 0);
+    else
+        call->rc = ish_embed_session_terminate(call->session, 500);
+    ish_embed_session_release(call->session);
+    atomic_store(&call->done, 1);
+    return NULL;
+}
+
+static int wait_session_closing(ish_embed_session_t *session,
+                                uint32_t timeout_ms) {
+    uint64_t deadline = monotonic_ms() + timeout_ms;
+    do {
+        int rc = ish_embed_session_retain(session);
+        if (rc == ISH_ERR_NO_SESSION) return 1;
+        if (rc != ISH_OK) return 0;
+        ish_embed_session_release(session);
+        usleep(1000);
+    } while (monotonic_ms() < deadline);
+    return 0;
+}
+
+static int test_session_control_close_order(enum retained_control_kind kind,
+                                            uint8_t type,
+                                            const char *label) {
+    g_mode = FAKE_SESSION_CONTROL_CLOSE_RACE;
+    g_session_control_race_type = type;
+    ish_embed_instance_t *inst = boot_instance();
+    ish_embed_session_t *session = spawn_echo(inst);
+    if (ish_embed_session_retain(session) != ISH_OK) return 1;
+
+    struct retained_control_call control = {
+        .session = session,
+        .kind = kind,
+        .rc = 123,
+    };
+    atomic_init(&control.done, 0);
+    pthread_t control_thread;
+    if (pthread_create(&control_thread, NULL,
+                       retained_control_thread, &control) != 0)
+        return 1;
+    if (!wait_fake_flag(&g_session_control_admitted, 2000)) {
+        fprintf(stderr, "%s/close: control was not admitted\n", label);
+        return 1;
+    }
+
+    struct bounded_close_call close_call = {
+        .session = session,
+        .elapsed_ms = 0,
+    };
+    atomic_init(&close_call.done, 0);
+    pthread_t close_thread;
+    if (pthread_create(&close_thread, NULL,
+                       bounded_close_thread, &close_call) != 0)
+        return 1;
+    if (!wait_session_closing(session, 1000)) {
+        fprintf(stderr, "%s/close: close did not publish closing\n", label);
+        return 1;
+    }
+
+    pthread_mutex_lock(&g_fake_lock);
+    g_release_session_control = 1;
+    pthread_cond_broadcast(&g_fake_cond);
+    pthread_mutex_unlock(&g_fake_lock);
+    pthread_join(control_thread, NULL);
+    pthread_join(close_thread, NULL);
+
+    int *delivered_flag = type == ISH_FT_SIGNAL ? &g_signal_count :
+        type == ISH_FT_RESIZE ? &g_resize_count : &g_terminate_count;
+    if (control.rc == ISH_OK)
+        (void)wait_fake_flag(delivered_flag, 1000);
+    pthread_mutex_lock(&g_fake_lock);
+    int delivered = type == ISH_FT_SIGNAL ? g_signal_count :
+        type == ISH_FT_RESIZE ? g_resize_count : g_terminate_count;
+    int close_delivered = g_session_close_count;
+    pthread_mutex_unlock(&g_fake_lock);
+    int probe_rc = ish_embed_setup_vm_root(inst,
+                                           "/srv/vms/after-control-close");
+    int rejected = control.rc == ISH_ERR_BROKEN_PIPE ||
+        control.rc == ISH_ERR_NOT_RUNNING;
+    int ordered = (rejected && delivered == 0) ||
+        (control.rc == ISH_OK && delivered == 1);
+    int ok = ordered && close_delivered == 0 &&
+        close_call.elapsed_ms <= 1500 &&
+        probe_rc == ISH_ERR_NOT_RUNNING;
+    if (!ok) {
+        fprintf(stderr,
+                "%s/close: control=%d delivered=%d close=%d "
+                "elapsed=%llums probe=%d\n",
+                label, control.rc, delivered, close_delivered,
+                (unsigned long long)close_call.elapsed_ms, probe_rc);
+    }
+    int shutdown_rc = ish_embed_shutdown(inst, 2000);
+    if (shutdown_rc != ISH_OK) ok = 0;
+    if (ok)
+        fprintf(stderr, "%s cannot follow SESSION_CLOSE: OK\n", label);
+    return ok ? 0 : 1;
 }
 
 struct bounded_oneshot_call {
@@ -2775,7 +2910,7 @@ int main(int argc, char **argv) {
         return 2;
     }
     if (argc != 2) {
-        fprintf(stderr, "usage: %s boot-timeout|bad-hello-ack|install-failure|bundled-supervisor-digest-mismatch|bundled-supervisor-path-mismatch|custom-supervisor|boot-null-output|stdin-close-order|control-frame-limit|control-critical-close|control-same-session-close|control-exited-same-session-close|control-critical-oneshot|control-preblocked-oneshot|control-byte-limit|control-byte-reserve|control-spawn-gate|control-oneshot-spawn-lock|supervisor-error|close-race|backlog|frame-backlog|backlog-control-pressure|borrow-shutdown|double-shutdown|active-call|broken-control|protocol-fatal|protocol-fatal-control-pressure|malformed-event TYPE|output-allocation-failure|spawn-argument-bound|shutdown-drain|log-backpressure|oneshot-timeout|oneshot-output\n", argv[0]);
+        fprintf(stderr, "usage: %s boot-timeout|bad-hello-ack|install-failure|bundled-supervisor-digest-mismatch|bundled-supervisor-path-mismatch|custom-supervisor|boot-null-output|stdin-close-order|control-frame-limit|control-critical-close|control-same-session-close|control-exited-same-session-close|signal-close-order|resize-close-order|terminate-close-order|control-critical-oneshot|control-preblocked-oneshot|control-byte-limit|control-byte-reserve|control-spawn-gate|control-oneshot-spawn-lock|supervisor-error|close-race|backlog|frame-backlog|backlog-control-pressure|borrow-shutdown|double-shutdown|active-call|broken-control|protocol-fatal|protocol-fatal-control-pressure|malformed-event TYPE|output-allocation-failure|spawn-argument-bound|shutdown-drain|log-backpressure|oneshot-timeout|oneshot-output\n", argv[0]);
         return 2;
     }
     if (strcmp(argv[1], "boot-timeout") == 0) return test_boot_timeout_cleanup();
@@ -2794,6 +2929,15 @@ int main(int argc, char **argv) {
     if (strcmp(argv[1], "control-critical-close") == 0) return test_control_critical_close_reserve();
     if (strcmp(argv[1], "control-same-session-close") == 0) return test_control_same_session_close_bound();
     if (strcmp(argv[1], "control-exited-same-session-close") == 0) return test_control_exited_same_session_close_bound();
+    if (strcmp(argv[1], "signal-close-order") == 0)
+        return test_session_control_close_order(
+            RETAINED_CONTROL_SIGNAL, ISH_FT_SIGNAL, "signal");
+    if (strcmp(argv[1], "resize-close-order") == 0)
+        return test_session_control_close_order(
+            RETAINED_CONTROL_RESIZE, ISH_FT_RESIZE, "resize");
+    if (strcmp(argv[1], "terminate-close-order") == 0)
+        return test_session_control_close_order(
+            RETAINED_CONTROL_TERMINATE, ISH_FT_TERMINATE, "terminate");
     if (strcmp(argv[1], "control-critical-oneshot") == 0) return test_control_critical_oneshot_bound();
     if (strcmp(argv[1], "control-preblocked-oneshot") == 0) return test_control_preblocked_oneshot_spawn();
     if (strcmp(argv[1], "control-byte-limit") == 0) return test_control_byte_queue_limit();

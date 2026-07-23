@@ -217,8 +217,9 @@ close/call UAF：close 先 detach handle、拒绝新调用，再等待所有已�
 
 Stage1 Swift 的 instance gate 让 oneshot 在调用期持 lease，并把 spawn lease 保留到
 session 的 native close 完成。只要存在 lease，shutdown 就在进入 v0.3.3 native 前立即
-busy；并发 boot/shutdown 也不会交错。native shutdown 失败不会清除 handle，可完成上述
-清理后重试。该门禁防止旧 ABI UAF，但不会取消调用，所以仍必须先等待它们结束。过渡
+busy；并发 boot/shutdown 也不会交错。native `BUSY` 保留运行态，可完成上述清理后重试；
+timeout 等终态失败隔离普通调用，但仍保留 shutdown 清理重试。该门禁防止旧 ABI UAF，
+但不会取消调用，所以仍必须先等待它们结束。过渡
 native 下同类状态也可能返回 busy 或相应错误。
 
 成功 shutdown 后不要在同一进程再次 boot。底层 iSH 仍有进程级/TLS 状态；一次 lifecycle

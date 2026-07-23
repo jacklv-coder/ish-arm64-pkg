@@ -85,8 +85,9 @@ fixes can still go upstream. See the
 - The call gate prevents close/call UAF but cannot cancel a permanently blocked
   non-read C call. Callers should still stop and await tasks first.
 - Shutdown succeeds only after every session is closed and active instance calls
-  such as spawn/runOneshot end. Failed Swift shutdown keeps the handle for
-  retry; success enters a consumed terminal state and rejects another boot.
+  such as spawn/runOneshot end. Swift restores running after `BUSY`; other
+  failures quarantine ordinary calls but retain shutdown cleanup retry. Success
+  enters a consumed terminal state and rejects another boot.
 - Host and supervisor must both use wire v4; there is no cross-version negotiation.
 - Before default supervisor installation, SHA-256 over the actual embedded bytes
   must match same-build metadata and the content-addressed path. A custom path
