@@ -54,8 +54,9 @@ int ish_ffi_install_executable(const char *guest_path,
                                uint32_t mode);
 
 /* Create essential device nodes (/dev/null, tty, ptmx, etc.) under the
- * real fs root, and mount devpts at /dev/pts. This startup-only entry point
- * must run after ish_ffi_become_init and before ish_ffi_task_start. */
+ * real fs root, mount devpts at /dev/pts, and mount the supervisor-visible
+ * procfs at /proc. This startup-only entry point must run after
+ * ish_ffi_become_init and before ish_ffi_task_start. */
 int ish_ffi_create_devices(void);
 
 /* execve the supervisor as PID1. argv_packed and envp_packed are

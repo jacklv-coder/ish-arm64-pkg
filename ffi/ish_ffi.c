@@ -189,6 +189,7 @@ int ish_ffi_chdir(const char *guest_path) {
  * ------------------------------------------------------------------ */
 
 extern const struct fs_ops devptsfs;
+extern const struct fs_ops procfs;
 extern int do_mount(const struct fs_ops *fs, const char *source,
                     const char *point, const char *info, int flags);
 
@@ -247,7 +248,21 @@ static int create_devices_under(const char *prefix) {
 }
 
 int ish_ffi_create_devices(void) {
-    return create_devices_under("");
+    int err = create_devices_under("");
+    if (err < 0) return err;
+
+    /* The embedded boot path does not pass through third_party/ish/main.c,
+     * which normally mounts procfs before entering task_run_current().
+     * ishsv relies on its own /proc to identify and reap descendants adopted
+     * after double-fork/setsid, so mount the supervisor-visible root procfs
+     * before starting the kernel thread. Per-VM procfs mounts remain separate
+     * and are prepared by ishsv immediately before chrooted spawns. */
+    err = generic_mkdirat(AT_PWD, "/proc", 0755);
+    if (err < 0 && err != _EEXIST) return err;
+    lock(&mounts_lock);
+    err = do_mount(&procfs, "proc", "/proc", "", 0);
+    unlock(&mounts_lock);
+    return err;
 }
 
 /* ------------------------------------------------------------------ *
