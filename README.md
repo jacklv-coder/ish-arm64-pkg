@@ -28,7 +28,8 @@ Stage1 的 native runtime 已加入 session retain/release、可等待 kernel �
 retain/release；它通过兼容 v0.3.3 的 Swift call gate 同时保护 instance 与 session：
 oneshot 在调用期持有 instance lease，spawn 将同一 lease 转交给 session，直到 native close
 完成才释放。存在活动调用或 session 时，shutdown 会先返回 busy，绝不进入旧 binary 的释放
-路径；失败的 shutdown 仍保留 handle 以便重试。完整 native borrow/cancel、类型化状态、
+路径；`BUSY` 恢复运行态，其他 shutdown 失败保留仅供清理重试的 handle。完整 native
+borrow/cancel、类型化状态、
 Terminal callback 队列与 VT parser 改造属于 **Stage2**，本阶段尚未交付。
 
 RootFS 不提交到本仓库、不包含在 XCFramework 或 GitHub Release 中。应用必须通过独立
@@ -142,8 +143,8 @@ readLoop: while true {
 `close()` 前仍应先停止并等待该 session 的任务；session gate 会等待已进入的 C 调用，不能
 强制取消永久不返回的非 read 调用。instance gate 会让 oneshot 和存活 session 持有 lease；
 此时 `shutdown()` 立即抛出 `ISH_ERR_BUSY`，不会调用 v0.3.3 的 native free。先停止并等待
-spawn/runOneshot，再关闭所有 session，然后调用 `try instance.shutdown()`；失败会保留实例
-handle，可在清理后重试。Stage1 Swift 的
+spawn/runOneshot，再关闭所有 session，然后调用 `try instance.shutdown()`；`BUSY` 可在清理
+业务调用后重试，其他失败会隔离普通调用但保留 shutdown 清理重试。Stage1 Swift 的
 `IshError.raw(Int32, String)` 仍是公开错误形式；类型化状态转换留到 Stage2。
 
 ## C ABI 与 wire protocol

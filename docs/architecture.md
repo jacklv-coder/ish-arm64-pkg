@@ -263,8 +263,8 @@ chroot 只隔离文件系统视图。所有 session 共享同一个 iSH kernel�
 Stage1 Swift 的 instance gate 还在进入 native 前执行旧 ABI 兼容保护：oneshot 和每个存活
 session 都持有 lease；有 lease 时立即 busy，并发 boot/shutdown 也被状态机拒绝。因此
 v0.3.3 shutdown 不会释放已经被 spawn/runOneshot/session 使用的 instance。只有 native
-返回成功时才清除 Swift handle；任何失败（包括 busy）都恢复原 handle 与 running 状态，
-调用方可在关闭 session/等待任务后重试。进入成功 shutdown 后，
+返回成功时才清除 Swift handle；busy 恢复原 handle 与 running 状态，timeout 等终态失败
+进入 quarantine，拒绝普通调用但允许 shutdown 清理重试。进入成功 shutdown 后，
 runtime 请求 supervisor 退出、关闭/排空 pumps、启用 iSH soft-halt，等待并 join kernel
 pthread，最后释放 instance。
 

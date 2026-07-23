@@ -257,7 +257,9 @@ void ish_embed_session_close(ish_embed_session_t *s);
 /* Politely shut down the supervisor and join the kernel pthread. All sessions
  * must be closed and all instance calls must have returned first, otherwise
  * ISH_ERR_BUSY is returned. After successful shutdown, the IshInstance is
- * invalidated; you cannot boot another one in this process. */
+ * invalidated; you cannot boot another one in this process. ISH_ERR_TIMEOUT or
+ * another terminal cleanup error leaves ordinary instance admission closed but
+ * preserves the handle so the caller can retry shutdown. */
 int ish_embed_shutdown(ish_embed_instance_t *inst, uint32_t grace_ms);
 
 /* Legacy compatibility entry point. It validates a live instance and a

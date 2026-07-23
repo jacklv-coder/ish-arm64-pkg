@@ -230,10 +230,11 @@ each oneshot. A successful spawn transfers the same lease into `IshSession`
 without a zero-count window; it is released only after native session close
 returns. Shutdown first atomically closes admission. Any oneshot/session lease
 causes immediate `ISH_ERR_BUSY` without entering v0.3.3 native shutdown; with no
-lease, one caller owns the transition. Native failure restores the same handle
-and running state, while success alone clears it. Boot/shutdown, two shutdown
-callers, and shutdown/call therefore cannot interleave a free of the old-ABI
-handle.
+lease, one caller owns the transition. Native `BUSY` restores the same handle
+and running state; timeout or another terminal cleanup error quarantines
+ordinary calls but permits shutdown retry. Success alone clears the handle.
+Boot/shutdown, two shutdown callers, and shutdown/call therefore cannot
+interleave a free of the old-ABI handle.
 
 ## Threads and backpressure
 

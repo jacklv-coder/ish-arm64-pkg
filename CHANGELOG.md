@@ -75,9 +75,9 @@
 - Swift 源保持 v0.3.3 ABI 兼容，不调用新增的 C retain/release 符号。
 - `IshInstanceCallGate` 串行化 boot/shutdown，并为 oneshot 与存活 session 持有 instance
   lease；只要存在 lease，shutdown 就在进入 v0.3.3 native 前返回 `ISH_ERR_BUSY`。spawn
-  将 lease 无缝转交给 session，native close 完成后才释放。任何 shutdown 失败都恢复原
-  handle，调用方可清理后重试；成功 shutdown 进入 consumed 终态，二次 boot 不会进入
-  native。
+  将 lease 无缝转交给 session，native close 完成后才释放。`BUSY` 恢复 running handle，
+  其他 shutdown 失败进入仅允许 shutdown 清理重试的 quarantine；成功 shutdown 进入
+  consumed 终态，二次 boot 不会进入 native。
 - Swift oneshot/read 在 native 前拒绝 NaN/无穷 timeout；正的亚毫秒 oneshot timeout
   向上取整为 1 ms，避免意外变成无超时。
 - `IshSessionCallGate` 用 Swift 层 `NSCondition` 与 `activeCalls` 防止 `close()` 回收仍被

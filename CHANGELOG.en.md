@@ -108,9 +108,10 @@ v0.4.0**.
 - `IshInstanceCallGate` serializes boot/shutdown and holds an instance lease for
   every oneshot and live session. Any lease returns `ISH_ERR_BUSY` before
   entering v0.3.3 native shutdown. Spawn transfers its lease into the session
-  until native close completes, and any shutdown failure restores the original
-  handle for cleanup and retry. Successful shutdown enters a consumed terminal
-  state, so another boot never reaches native code.
+  until native close completes. `BUSY` restores the running handle; any other
+  shutdown failure quarantines ordinary calls while preserving shutdown-only
+  cleanup retry. Successful shutdown enters a consumed terminal state, so
+  another boot never reaches native code.
 - Swift oneshot/read reject NaN or infinite timeouts before native entry, and a
   positive sub-millisecond oneshot timeout rounds up to 1 ms rather than
   becoming an accidental no-timeout request.
