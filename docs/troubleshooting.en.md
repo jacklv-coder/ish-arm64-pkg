@@ -123,22 +123,6 @@ or publisher. This source PR carries neither RootFS content nor a prebuilt
 binary. Build local test binaries from the current checkout; production binaries
 must come from a later Release whose gates passed.
 
-## `fs-codex` provision or `--verify` failure
-
-Preserve `build/fs-codex.provision.log`, then check `CODEX_PKG`, `CODEX_VERSION`,
-`CODEX_VM_NAME`, and `CODEX_BIN_NAME`. An exact SemVer such as `1.2.3` requires
-the npm-installed version to match byte for byte. `latest` or another dist-tag
-may resolve differently, but schema 2 records both request kind and actual
-version. Never edit the identity to bypass a wrong install.
-
-Validation also requires `package.json` to map `CODEX_BIN_NAME` to a safe
-relative target. That target must be a guest-executable regular file in both
-host backing and fakefs metadata, while `/usr/local/bin/<name>` must resolve
-exactly to it through a same-inode hardlink or safe symlink. Missing or
-non-executable entries, escaping symlinks, version drift, or changed clean
-RootFS content reject reuse and force provisioning. If reprovisioning fails,
-the old `fs-codex` remains unchanged.
-
 ## `ISH_ERR_PROTOCOL` / handshake failure
 
 Host and supervisor must use exact-match wire v4. Common causes:

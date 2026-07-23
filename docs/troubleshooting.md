@@ -100,19 +100,6 @@ blob 与生成的元数据来自不同构建、bytes 被改动，或复用了旧
 不是数字签名，也不认证下载来源或发布者。本源码 PR 不携带 RootFS 或预构建 binary；测试
 本地二进制必须由当前检出构建，正式二进制只能来自通过门禁的后续 Release。
 
-## `fs-codex` provision 或 `--verify` 失败
-
-先保留 `build/fs-codex.provision.log`，再核对 `CODEX_PKG`、`CODEX_VERSION`、
-`CODEX_VM_NAME` 与 `CODEX_BIN_NAME`。形如 `1.2.3` 的 exact SemVer 要求 npm 实际安装版本
-逐字相同；`latest`/dist-tag 可以解析为不同版本，但请求类型和实际版本都会写入 schema 2
-身份。不要通过手改 identity 绕过错装。
-
-验证还要求 `package.json` 将 `CODEX_BIN_NAME` 映射到安全相对 target；target 必须在 host
-backing 与 fakefs metadata 中都是 guest 可执行普通文件，`/usr/local/bin/<name>` 必须以
-同 inode hardlink 或安全 symlink 精确指向它。入口缺失、不可执行、越界 symlink、版本漂移
-或 clean RootFS 内容变化都会拒绝复用并重新 provision；若重新 provision 仍失败，旧
-`fs-codex` 保持不变。
-
 ## `ISH_ERR_PROTOCOL` / 握手失败
 
 host 与 supervisor 必须精确使用 wire v4。常见原因：

@@ -320,7 +320,7 @@ expect_cache_rejection() {
     local rc
     set +e
     PATH="$FAKE_BIN:$PATH" \
-        "$SHADOW_REPO/scripts/run-host-tests.sh" --no-codex \
+        "$SHADOW_REPO/scripts/run-host-tests.sh" \
         > "$log" 2>&1
     rc=$?
     set -e
@@ -503,7 +503,7 @@ write_exit_program "$SHADOW_REPO/build-host/ishembed_smoke" 23
 
 set +e
 PATH="$FAKE_BIN:$PATH" \
-    "$SHADOW_REPO/scripts/run-host-tests.sh" --no-codex --smoke \
+    "$SHADOW_REPO/scripts/run-host-tests.sh" --smoke \
     > "$TEST_ROOT/runner.log" 2>&1
 runner_rc=$?
 set -e
@@ -529,7 +529,7 @@ grep -q '^smoke       : 23$' "$TEST_ROOT/runner.log" || {
 write_exit_program "$SHADOW_REPO/build-host/dirty_page_test" 31
 set +e
 PATH="$FAKE_BIN:$PATH" \
-    "$SHADOW_REPO/scripts/run-host-tests.sh" --no-codex \
+    "$SHADOW_REPO/scripts/run-host-tests.sh" \
     > "$TEST_ROOT/dirty-page-gate.log" 2>&1
 dirty_page_gate_rc=$?
 set -e
@@ -638,7 +638,7 @@ write_embed_build_metadata \
 
 rm -rf "$SHADOW_REPO/build/fs"
 PATH="$FAKE_BIN:$PATH" \
-    "$SHADOW_REPO/scripts/run-host-tests.sh" --no-codex \
+    "$SHADOW_REPO/scripts/run-host-tests.sh" \
     > "$TEST_ROOT/clean-checkout.log" 2>&1
 [[ -f "$SHADOW_REPO/build/rootfs-builder-called" ]] || {
     printf 'runner did not invoke the pinned RootFS builder for a clean checkout\n' >&2
@@ -655,7 +655,7 @@ grep -Fq 'building clean RootFS from ' "$TEST_ROOT/clean-checkout.log" && \
 
 rm -f "$SHADOW_REPO/build/rootfs-builder-called"
 PATH="$FAKE_BIN:$PATH" \
-    "$SHADOW_REPO/scripts/run-host-tests.sh" --no-codex \
+    "$SHADOW_REPO/scripts/run-host-tests.sh" \
     > "$TEST_ROOT/matching-rootfs.log" 2>&1
 [[ ! -e "$SHADOW_REPO/build/rootfs-builder-called" ]] || {
     printf 'runner rebuilt a matching RootFS instead of reusing it\n' >&2
@@ -682,7 +682,7 @@ chmod +x "$SHADOW_REPO/build-host/procfs_test"
 RUNNER_USE_READY="$TEST_ROOT/runner-use.ready" \
 RUNNER_USE_CONTINUE="$TEST_ROOT/runner-use.continue" \
 PATH="$FAKE_BIN:$PATH" \
-    "$SHADOW_REPO/scripts/run-host-tests.sh" --no-codex \
+    "$SHADOW_REPO/scripts/run-host-tests.sh" \
     > "$TEST_ROOT/runner-use-lock.log" 2>&1 &
 runner_use_pid=$!
 for _ in $(seq 1 200); do
@@ -729,7 +729,7 @@ BACKGROUND_PROCFS
 chmod +x "$SHADOW_REPO/build-host/procfs_test"
 RUNNER_LEAK_PID_FILE="$TEST_ROOT/runner-leak.pid" \
 PATH="$FAKE_BIN:$PATH" \
-    "$SHADOW_REPO/scripts/run-host-tests.sh" --no-codex \
+    "$SHADOW_REPO/scripts/run-host-tests.sh" \
     > "$TEST_ROOT/runner-fd-isolation.log" 2>&1
 RUNNER_LEAK_PID="$(cat "$TEST_ROOT/runner-leak.pid")"
 kill -0 "$RUNNER_LEAK_PID" 2>/dev/null || {
@@ -769,7 +769,7 @@ sed 's/^ISH_GUEST_ARCH=arm64$/ISH_GUEST_ARCH=i386/' \
 mv "$SHADOW_REPO/build/fs/.ishembed-rootfs-identity.tmp" \
     "$SHADOW_REPO/build/fs/.ishembed-rootfs-identity"
 PATH="$FAKE_BIN:$PATH" \
-    "$SHADOW_REPO/scripts/run-host-tests.sh" --no-codex \
+    "$SHADOW_REPO/scripts/run-host-tests.sh" \
     > "$TEST_ROOT/stale-rootfs.log" 2>&1
 [[ -f "$SHADOW_REPO/build/rootfs-builder-called" ]] || {
     printf 'runner did not rebuild a stale i386 RootFS identity\n' >&2
@@ -789,7 +789,7 @@ sed 's/^ROOTFS_INPUTS_SHA256=.*$/ROOTFS_INPUTS_SHA256=00000000000000000000000000
 mv "$SHADOW_REPO/build/fs/.ishembed-rootfs-identity.tmp" \
     "$SHADOW_REPO/build/fs/.ishembed-rootfs-identity"
 PATH="$FAKE_BIN:$PATH" \
-    "$SHADOW_REPO/scripts/run-host-tests.sh" --no-codex \
+    "$SHADOW_REPO/scripts/run-host-tests.sh" \
     > "$TEST_ROOT/stale-pin.log" 2>&1
 [[ -f "$SHADOW_REPO/build/rootfs-builder-called" ]] || {
     printf 'runner did not rebuild a RootFS with a stale input pin\n' >&2
@@ -800,7 +800,7 @@ rm -f \
     "$SHADOW_REPO/build/rootfs-builder-called" \
     "$SHADOW_REPO/build/fs/.ishembed-rootfs-identity"
 PATH="$FAKE_BIN:$PATH" \
-    "$SHADOW_REPO/scripts/run-host-tests.sh" --no-codex \
+    "$SHADOW_REPO/scripts/run-host-tests.sh" \
     > "$TEST_ROOT/legacy-rootfs.log" 2>&1
 [[ -f "$SHADOW_REPO/build/rootfs-builder-called" ]] || {
     printf 'runner did not rebuild a legacy RootFS without an identity marker\n' >&2
@@ -815,84 +815,6 @@ grep -q 'missing or unsafe RootFS identity marker' \
 }
 [[ -f "$SHADOW_REPO/build/fs/.ishembed-rootfs-identity" ]] || {
     printf 'legacy RootFS rebuild did not publish a new identity marker\n' >&2
-    exit 1
-}
-
-write_exit_program "$SHADOW_REPO/build-host/ishembed_smoke" 0
-mkdir -p "$SHADOW_REPO/build/fs-codex/data"
-: > "$SHADOW_REPO/build/fs-codex/meta.db"
-sed 's/^ISH_GUEST_ARCH=arm64$/ISH_GUEST_ARCH=i386/' \
-    "$SHADOW_REPO/build/fs/.ishembed-rootfs-identity" \
-    > "$SHADOW_REPO/build/fs-codex/.ishembed-rootfs-identity"
-cat > "$SHADOW_REPO/scripts/provision-codex-rootfs.sh" <<'PROVISION_FAIL'
-#!/usr/bin/env bash
-[[ "${FORCE:-0}" == "1" ]] || exit 18
-exit 17
-PROVISION_FAIL
-chmod +x "$SHADOW_REPO/scripts/provision-codex-rootfs.sh"
-write_exit_program "$SHADOW_REPO/build-host/codex_test" 0
-
-set +e
-PATH="$FAKE_BIN:$PATH" \
-    "$SHADOW_REPO/scripts/run-host-tests.sh" \
-    > "$TEST_ROOT/provision.log" 2>&1
-provision_case_rc=$?
-set -e
-
-[[ "$provision_case_rc" == 17 ]] || {
-    printf 'expected provision failure status 17, got %s\n' \
-        "$provision_case_rc" >&2
-    sed -n '1,180p' "$TEST_ROOT/provision.log" >&2
-    exit 1
-}
-grep -q '^provision   : 17$' "$TEST_ROOT/provision.log" || {
-    printf 'runner summary did not preserve failing provision status\n' >&2
-    sed -n '1,180p' "$TEST_ROOT/provision.log" >&2
-    exit 1
-}
-grep -q 'provisioned RootFS identity is stale; forcing reprovision' \
-    "$TEST_ROOT/provision.log" || {
-    printf 'runner did not force reprovision of the stale derived RootFS\n' >&2
-    sed -n '1,180p' "$TEST_ROOT/provision.log" >&2
-    exit 1
-}
-grep -q '^codex_test  : not run (provision failed)$' \
-    "$TEST_ROOT/provision.log" || {
-    printf 'runner did not mark codex as skipped after provision failure\n' >&2
-    sed -n '1,180p' "$TEST_ROOT/provision.log" >&2
-    exit 1
-}
-
-cat > "$SHADOW_REPO/scripts/provision-codex-rootfs.sh" <<'PROVISION_OK'
-#!/usr/bin/env bash
-set -euo pipefail
-repo="$(cd "$(dirname "$0")/.." && pwd)"
-rm -rf "$repo/build/fs-codex"
-cp -a "$repo/build/fs" "$repo/build/fs-codex"
-PROVISION_OK
-chmod +x "$SHADOW_REPO/scripts/provision-codex-rootfs.sh"
-write_exit_program "$SHADOW_REPO/build-host/codex_test" 29
-
-set +e
-PATH="$FAKE_BIN:$PATH" \
-    "$SHADOW_REPO/scripts/run-host-tests.sh" \
-    > "$TEST_ROOT/codex.log" 2>&1
-codex_case_rc=$?
-set -e
-
-[[ "$codex_case_rc" == 29 ]] || {
-    printf 'expected codex failure status 29, got %s\n' "$codex_case_rc" >&2
-    sed -n '1,180p' "$TEST_ROOT/codex.log" >&2
-    exit 1
-}
-grep -q '^provision   : 0$' "$TEST_ROOT/codex.log" || {
-    printf 'runner summary did not preserve successful provision status\n' >&2
-    sed -n '1,180p' "$TEST_ROOT/codex.log" >&2
-    exit 1
-}
-grep -q '^codex_test  : 29$' "$TEST_ROOT/codex.log" || {
-    printf 'runner summary did not preserve failing codex status\n' >&2
-    sed -n '1,180p' "$TEST_ROOT/codex.log" >&2
     exit 1
 }
 
@@ -1549,341 +1471,5 @@ if find "$ATOMIC_BUILD" -maxdepth 1 \
     printf 'successful RootFS replacement retained a staging/previous generation\n' >&2
     exit 1
 fi
-
-# Exercise the real derived-RootFS identity/transaction script with a minimal
-# verifier and provision binary. The derived identity must change for an exact
-# base-content change even when the clean marker/receipt recipe stays byte-for-
-# byte identical, and for every package/version/tool input.
-CODEX_FIXTURE="$TEST_ROOT/codex-identity"
-CODEX_PROVISIONER="$CODEX_FIXTURE/scripts/provision-codex-rootfs.sh"
-mkdir -p \
-    "$CODEX_FIXTURE/scripts" \
-    "$CODEX_FIXTURE/build/fs/data/etc" \
-    "$CODEX_FIXTURE/build-host"
-cp "$PKG_ROOT/scripts/provision-codex-rootfs.sh" "$CODEX_PROVISIONER"
-printf 'fixture pin\n' > "$CODEX_FIXTURE/scripts/alpine-rootfs-pin.sh"
-cat > "$CODEX_FIXTURE/scripts/build-rootfs.sh" <<'CODEX_ROOTFS_BUILDER'
-#!/usr/bin/env bash
-set -euo pipefail
-repo="$(cd "$(dirname "$0")/.." && pwd)"
-verify_rootfs() {
-    local path="$1"
-    [[ -d "$path" && ! -L "$path" &&
-       -f "$path/meta.db" && ! -L "$path/meta.db" &&
-       -d "$path/data" && ! -L "$path/data" &&
-       -f "$path/.ishembed-rootfs-identity" &&
-       ! -L "$path/.ishembed-rootfs-identity" ]]
-}
-case "${1:-}" in
-    --verify-rootfs)
-        [[ $# -eq 2 ]] || exit 64
-        verify_rootfs "$2"
-        ;;
-    --verify-bundle)
-        [[ $# -eq 2 ]] || exit 64
-        requested="$(cd "$2" && pwd -P)"
-        expected="$(cd "$repo/build" && pwd -P)"
-        [[ "$requested" == "$expected" ]] || exit 1
-        verify_rootfs "$repo/build/fs"
-        for artifact in fs.tar.gz SHA256SUMS ROOTFS_RECEIPT; do
-            [[ -f "$repo/build/$artifact" && ! -L "$repo/build/$artifact" ]] || exit 1
-        done
-        ;;
-    *) exit 64 ;;
-esac
-CODEX_ROOTFS_BUILDER
-chmod +x "$CODEX_FIXTURE/scripts/build-rootfs.sh" "$CODEX_PROVISIONER"
-cat > "$CODEX_FIXTURE/build-host/provision_codex" <<'CODEX_PROVISION_BINARY'
-#!/usr/bin/env bash
-set -euo pipefail
-rootfs="${ISH_EMBED_ROOTFS:?}"
-vm_name="${VM_NAME:?}"
-package="${NPM_PKG:?}"
-requested="${NPM_VERSION:-}"
-bin_name="${BIN_NAME:?}"
-case "$requested" in
-    "") version=1.0.0 ;;
-    next) version=3.1.0 ;;
-    *) version="$requested" ;;
-esac
-version="${FIXTURE_ACTUAL_VERSION_OVERRIDE:-$version}"
-package_json="$rootfs/data/srv/vms/$vm_name/usr/local/lib/node_modules/$package/package.json"
-package_dir="$(dirname "$package_json")"
-target="$package_dir/bin/codex.js"
-global_entry="$rootfs/data/srv/vms/$vm_name/usr/local/bin/$bin_name"
-mkdir -p "$(dirname "$target")" "$(dirname "$global_entry")"
-printf '#!/usr/bin/env node\n' > "$target"
-chmod 0755 "$target"
-rm -f "$global_entry"
-ln "$target" "$global_entry"
-python3 - \
-    "$rootfs/meta.db" "$package_json" "$package" "$version" \
-    "$vm_name" "$bin_name" <<'PY'
-import json
-import os
-import sqlite3
-import stat
-import struct
-import sys
-
-database_path, package_json, package, version, vm_name, bin_name = sys.argv[1:]
-with open(package_json, "w", encoding="utf-8") as stream:
-    json.dump(
-        {
-            "name": package,
-            "version": version,
-            "bin": {bin_name: "bin/codex.js"},
-        },
-        stream,
-    )
-
-target_guest = (
-    f"/srv/vms/{vm_name}/usr/local/lib/node_modules/{package}/bin/codex.js"
-)
-global_guest = f"/srv/vms/{vm_name}/usr/local/bin/{bin_name}"
-raw_stat = struct.pack("<I", stat.S_IFREG | 0o755) + bytes(12)
-connection = sqlite3.connect(database_path)
-connection.executescript("""
-create table if not exists stats (inode integer primary key, stat blob);
-create table if not exists paths (path blob primary key, inode integer);
-""")
-for guest_path in (target_guest, global_guest):
-    connection.execute(
-        "delete from paths where path = ?",
-        (sqlite3.Binary(guest_path.encode("utf-8")),),
-    )
-inode = connection.execute("select coalesce(max(inode), 1000) + 1 from stats").fetchone()[0]
-connection.execute("insert into stats(inode, stat) values (?, ?)", (inode, raw_stat))
-for guest_path in (target_guest, global_guest):
-    connection.execute(
-        "insert into paths(path, inode) values (?, ?)",
-        (sqlite3.Binary(guest_path.encode("utf-8")), inode),
-    )
-connection.commit()
-connection.close()
-PY
-CODEX_PROVISION_BINARY
-chmod +x "$CODEX_FIXTURE/build-host/provision_codex"
-python3 - "$CODEX_FIXTURE/build/fs/meta.db" <<'PY'
-import sqlite3
-import sys
-
-connection = sqlite3.connect(sys.argv[1])
-connection.executescript("""
-create table stats (inode integer primary key, stat blob);
-create table paths (path blob primary key, inode integer);
-""")
-connection.commit()
-connection.close()
-PY
-printf 'fixture base payload\n' > "$CODEX_FIXTURE/build/fs/data/etc/base-release"
-printf '%s\n' \
-    'ROOTFS_IDENTITY_SCHEMA=2' \
-    'ROOTFS_RECIPE=fixture-same-recipe' \
-    'ROOTFS_RECIPE_SHA256=0000000000000000000000000000000000000000000000000000000000000001' \
-    > "$CODEX_FIXTURE/build/fs/.ishembed-rootfs-identity"
-tar -C "$CODEX_FIXTURE/build" -czf "$CODEX_FIXTURE/build/fs.tar.gz" fs
-codex_fixture_tar_sha="$(shasum -a 256 "$CODEX_FIXTURE/build/fs.tar.gz" | awk '{print $1}')"
-printf '%s  fs.tar.gz\n' "$codex_fixture_tar_sha" \
-    > "$CODEX_FIXTURE/build/SHA256SUMS"
-printf '%s\n' \
-    'ROOTFS_RECEIPT_SCHEMA=1' \
-    'ROOTFS_RECIPE_SHA256=0000000000000000000000000000000000000000000000000000000000000001' \
-    'ROOTFS_IDENTITY_SHA256=0000000000000000000000000000000000000000000000000000000000000002' \
-    "ROOTFS_TARBALL_SHA256=$codex_fixture_tar_sha" \
-    'ROOTFS_SUMS_SHA256=0000000000000000000000000000000000000000000000000000000000000003' \
-    > "$CODEX_FIXTURE/build/ROOTFS_RECEIPT"
-
-CODEX_VERSION=1.0.0 /bin/bash "$CODEX_PROVISIONER" \
-    > "$CODEX_FIXTURE/provision-v1.log" 2>&1
-CODEX_VERSION=1.0.0 /bin/bash "$CODEX_PROVISIONER" --verify
-codex_identity="$CODEX_FIXTURE/build/fs-codex/.ishembed-codex-identity"
-for codex_field in \
-    CLEAN_ROOTFS_IDENTITY_SHA256 \
-    CLEAN_ROOTFS_RECEIPT_SHA256 \
-    CLEAN_ROOTFS_META_SHA256 \
-    CLEAN_ROOTFS_DATA_SHA256 \
-    CLEAN_ROOTFS_CONTENT_SHA256 \
-    CODEX_PROVISION_SCRIPT_SHA256 \
-    CODEX_PROVISION_BINARY_SHA256 \
-    ROOTFS_VERIFIER_SHA256 \
-    CODEX_INPUT_SHA256; do
-    grep -Eq "^${codex_field}=[0-9a-f]{64}$" "$codex_identity" || {
-        printf 'Codex derived identity omitted %s\n' "$codex_field" >&2
-        exit 1
-    }
-done
-grep -q '^CODEX_ACTUAL_VERSION=1.0.0$' "$codex_identity" || {
-    printf 'Codex derived identity did not record the installed version\n' >&2
-    exit 1
-}
-grep -q '^CODEX_ROOTFS_IDENTITY_SCHEMA=2$' "$codex_identity" || {
-    printf 'Codex derived identity did not use the strict entry schema\n' >&2
-    exit 1
-}
-grep -q '^CODEX_REQUEST_KIND=exact$' "$codex_identity" || {
-    printf 'exact Codex SemVer was not classified as exact\n' >&2
-    exit 1
-}
-
-set +e
-CODEX_VERSION=2.0.0 /bin/bash "$CODEX_PROVISIONER" --verify \
-    > "$CODEX_FIXTURE/verify-v2-before.log" 2>&1
-codex_version_stale_rc=$?
-set -e
-[[ "$codex_version_stale_rc" -ne 0 ]] || {
-    printf 'CODEX_VERSION change reused a stale derived RootFS\n' >&2
-    exit 1
-}
-CODEX_VERSION=2.0.0 /bin/bash "$CODEX_PROVISIONER" \
-    > "$CODEX_FIXTURE/provision-v2.log" 2>&1
-CODEX_VERSION=2.0.0 /bin/bash "$CODEX_PROVISIONER" --verify
-grep -q '^CODEX_ACTUAL_VERSION=2.0.0$' "$codex_identity" || {
-    printf 'Codex reprovision did not bind actual version 2.0.0\n' >&2
-    exit 1
-}
-
-# A successful provision binary cannot silently satisfy an exact SemVer with a
-# different installed version. Publication must fail and retain the old tree.
-codex_identity_before_mismatch="$(shasum -a 256 "$codex_identity" | awk '{print $1}')"
-set +e
-FIXTURE_ACTUAL_VERSION_OVERRIDE=9.9.9 FORCE=1 CODEX_VERSION=3.0.0 \
-    /bin/bash "$CODEX_PROVISIONER" \
-    > "$CODEX_FIXTURE/provision-exact-mismatch.log" 2>&1
-codex_exact_mismatch_rc=$?
-set -e
-[[ "$codex_exact_mismatch_rc" -ne 0 ]] || {
-    printf 'exact Codex version mismatch was published\n' >&2
-    exit 1
-}
-CODEX_VERSION=2.0.0 /bin/bash "$CODEX_PROVISIONER" --verify
-[[ "$(shasum -a 256 "$codex_identity" | awk '{print $1}')" == \
-   "$codex_identity_before_mismatch" ]] || {
-    printf 'failed exact-version provision changed the published identity\n' >&2
-    exit 1
-}
-
-# Both the package-local bin target and its global command entry are part of
-# reuse admission, not merely package.json name/version metadata.
-codex_package_dir="$CODEX_FIXTURE/build/fs-codex/data/srv/vms/codex/usr/local/lib/node_modules/@openai/codex"
-codex_target_backing="$codex_package_dir/bin/codex.js"
-codex_global_backing="$CODEX_FIXTURE/build/fs-codex/data/srv/vms/codex/usr/local/bin/codex"
-for codex_entry_case in target global; do
-    case "$codex_entry_case" in
-        target) codex_entry_path="$codex_target_backing" ;;
-        global) codex_entry_path="$codex_global_backing" ;;
-    esac
-    mv "$codex_entry_path" "$CODEX_FIXTURE/${codex_entry_case}.saved"
-    set +e
-    CODEX_VERSION=2.0.0 /bin/bash "$CODEX_PROVISIONER" --verify \
-        > "$CODEX_FIXTURE/verify-missing-${codex_entry_case}.log" 2>&1
-    codex_entry_rc=$?
-    set -e
-    mv "$CODEX_FIXTURE/${codex_entry_case}.saved" "$codex_entry_path"
-    [[ "$codex_entry_rc" -ne 0 ]] || {
-        printf 'missing Codex %s entry passed derived identity verification\n' \
-            "$codex_entry_case" >&2
-        exit 1
-    }
-    CODEX_VERSION=2.0.0 /bin/bash "$CODEX_PROVISIONER" --verify
-done
-
-# Matching fakefs inode metadata alone is not enough for a regular global
-# entry: its host backing must be the same hardlink, not a divergent file.
-mv "$codex_global_backing" "$CODEX_FIXTURE/global-hardlink.saved"
-cp "$CODEX_FIXTURE/global-hardlink.saved" "$codex_global_backing"
-set +e
-CODEX_VERSION=2.0.0 /bin/bash "$CODEX_PROVISIONER" --verify \
-    > "$CODEX_FIXTURE/verify-divergent-global-backing.log" 2>&1
-codex_divergent_backing_rc=$?
-set -e
-rm -f "$codex_global_backing"
-mv "$CODEX_FIXTURE/global-hardlink.saved" "$codex_global_backing"
-[[ "$codex_divergent_backing_rc" -ne 0 ]] || {
-    printf 'divergent Codex global backing passed hardlink verification\n' >&2
-    exit 1
-}
-CODEX_VERSION=2.0.0 /bin/bash "$CODEX_PROVISIONER" --verify
-
-set +e
-CODEX_PKG=@openai/codex-fixture CODEX_VERSION=2.0.0 \
-    /bin/bash "$CODEX_PROVISIONER" --verify \
-    > "$CODEX_FIXTURE/verify-package-change.log" 2>&1
-codex_package_stale_rc=$?
-set -e
-[[ "$codex_package_stale_rc" -ne 0 ]] || {
-    printf 'CODEX_PKG change reused a stale derived RootFS\n' >&2
-    exit 1
-}
-
-package_json="$CODEX_FIXTURE/build/fs-codex/data/srv/vms/codex/usr/local/lib/node_modules/@openai/codex/package.json"
-cp "$package_json" "$CODEX_FIXTURE/package.json.saved"
-python3 - "$package_json" <<'PY'
-import json
-import sys
-with open(sys.argv[1], "w", encoding="utf-8") as stream:
-    json.dump({"name": "@openai/codex", "version": "9.9.9"}, stream)
-PY
-set +e
-CODEX_VERSION=2.0.0 /bin/bash "$CODEX_PROVISIONER" --verify \
-    > "$CODEX_FIXTURE/verify-actual-version.log" 2>&1
-codex_actual_stale_rc=$?
-set -e
-[[ "$codex_actual_stale_rc" -ne 0 ]] || {
-    printf 'installed Codex version drift passed derived identity verification\n' >&2
-    exit 1
-}
-cp "$CODEX_FIXTURE/package.json.saved" "$package_json"
-
-base_content_before="$(awk -F= '$1 == "CLEAN_ROOTFS_CONTENT_SHA256" { print $2 }' "$codex_identity")"
-python3 - "$CODEX_FIXTURE/build/fs/meta.db" <<'PY'
-import sqlite3
-import sys
-
-connection = sqlite3.connect(sys.argv[1])
-connection.execute("create table fixture_runtime_change (value text)")
-connection.execute(
-    "insert into fixture_runtime_change(value) values (?)",
-    ("runtime change under the same recipe",),
-)
-connection.commit()
-connection.close()
-PY
-set +e
-CODEX_VERSION=2.0.0 /bin/bash "$CODEX_PROVISIONER" --verify \
-    > "$CODEX_FIXTURE/verify-same-recipe-new-base.log" 2>&1
-codex_base_stale_rc=$?
-set -e
-[[ "$codex_base_stale_rc" -ne 0 ]] || {
-    printf 'same-recipe but byte-different clean RootFS reused stale fs-codex\n' >&2
-    exit 1
-}
-CODEX_VERSION=2.0.0 /bin/bash "$CODEX_PROVISIONER" \
-    > "$CODEX_FIXTURE/provision-new-base.log" 2>&1
-CODEX_VERSION=2.0.0 /bin/bash "$CODEX_PROVISIONER" --verify
-base_content_after="$(awk -F= '$1 == "CLEAN_ROOTFS_CONTENT_SHA256" { print $2 }' "$codex_identity")"
-[[ "$base_content_after" =~ ^[0-9a-f]{64}$ &&
-   "$base_content_after" != "$base_content_before" ]] || {
-    printf 'Codex identity did not bind the exact changed clean RootFS content\n' >&2
-    exit 1
-}
-
-# npm dist-tags are intentionally not exact-version assertions: record the tag
-# request while binding reuse to the concrete version that npm resolved.
-FORCE=1 CODEX_VERSION=next /bin/bash "$CODEX_PROVISIONER" \
-    > "$CODEX_FIXTURE/provision-tag.log" 2>&1
-CODEX_VERSION=next /bin/bash "$CODEX_PROVISIONER" --verify
-grep -q '^CODEX_REQUESTED_VERSION=next$' "$codex_identity" || {
-    printf 'Codex tag request was not recorded\n' >&2
-    exit 1
-}
-grep -q '^CODEX_REQUEST_KIND=tag$' "$codex_identity" || {
-    printf 'Codex dist-tag was not classified as a tag\n' >&2
-    exit 1
-}
-grep -q '^CODEX_ACTUAL_VERSION=3.1.0$' "$codex_identity" || {
-    printf 'Codex dist-tag did not bind its resolved actual version\n' >&2
-    exit 1
-}
 
 printf 'host-test identity and status regressions passed.\n'

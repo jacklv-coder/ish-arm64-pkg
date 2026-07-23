@@ -242,12 +242,12 @@ Stage1 Swift 尚未交付新的 typed status 和 Terminal callback 有界投递�
 ## Chroot 准备与隔离边界
 
 绝对 `chroot_path` spawn 前，guest PID 1 会重新验证并按需修复必要的 device 节点、
-devpts/procfs 挂载与运行目录。它不永久缓存“该路径已准备”，所以同路径 RootFS 被替换
-或挂载丢失后仍会重新检查。
+devpts/procfs 挂载与传统的 `/root` home。它不永久缓存“该路径已准备”，所以同路径
+RootFS 被替换或挂载丢失后仍会重新检查。supervisor 不创建任何 Codex CLI 配置或
+工具专用目录。
 
-`/root/.codex/config.toml` 缺失时，supervisor 会在同目录完整写入临时文件，再以不可覆盖
-的原子操作发布默认配置。已有的非符号链接普通文件会保留全部内容，仅把权限收紧为
-`0600`；符号链接、目录、FIFO 等非普通文件会使 spawn 在 fork 前失败，不会被覆盖或跟随。
+Node.js/npm 是可选的通用 guest 能力：调用方可以在自己的可写 RootFS 中通过 `apk`
+安装并运行，但 IshEmbed 不默认预装它们，也不自动安装任何 npm package。
 
 chroot 只隔离文件系统视图。所有 session 共享同一个 iSH kernel、宿主进程、内存预算
 和攻击面，不能把它声明为强安全沙箱。PocketRoot 仍需命令 allowlist、资源预算与产品
@@ -302,15 +302,9 @@ PID、进程启动身份和随机 token 只用于认证嵌套调用。builder �
 失败逆序回滚，成功删除 staging 中的旧代际。SIGKILL/断电不能保证多路径回滚，但
 receipt-last 会使半发布代际验证失败而不被复用。
 
-runner 从验证、按需构建/provision 一直持锁到最后一次测试使用，关闭 validate→use 替换
-窗口。复用允许正常运行造成的 meta/data 变化，但会重验四件套 receipt、recipe、数据库/
-存储一致性和关键摘要。`fs-codex` 身份另外绑定 clean marker/receipt/当前内容、包名、
-exact/tag 请求分类、VM/bin、provision script/binary、verifier 和实际 package.json 版本。
-exact SemVer 必须逐字匹配实际版本；tag 可解析成不同实际版本，但两者都写入身份。验证器还
-要求 package bin target 与全局入口在 host backing 和 fakefs metadata 中安全存在、guest
-可执行，并且 symlink/hardlink 精确映射到同一 target；任何失配都重新 provision。它只是
-开发测试输入身份，不是 PocketRoot 产品 RootFS manifest，也不
-提供发布许可或最终安装完整性保证。
+runner 从验证、按需构建一直持锁到最后一次测试使用，关闭 validate→use 替换窗口。
+复用允许正常运行造成的 meta/data 变化，但会重验四件套 receipt、recipe、数据库/
+存储一致性和关键摘要。
 
 `ROOTFS_RECEIPT` 的语义是 lineage/初始快照提交记录：它绑定静态 identity marker、初始
 `fs.tar.gz` 及其 `SHA256SUMS`，而不是给可变的当前 `fs` 做逐字节封存。测试或 provision

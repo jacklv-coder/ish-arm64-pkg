@@ -13,7 +13,7 @@ wire v4, and release supply chain.
 | Protocol/digest unit | `proto_test`, `supervisor_stdin_test`, `sha256_test` | v4 framing, boundaries, stdin partial writes/backpressure, SHA-256 known answers and malformed-metadata rejection | a real iSH boot |
 | Lifecycle | `lifecycle_test` | retain/release, close/read/write/signal interleavings, shutdown/busy, PID identity, bad embedded digest/path rejection before install | Stage2 Swift borrowing is complete |
 | JIT dirty pages | `dirty_page_test`, `dirty-page-trace` | READ does not mark, fast/miss/cross-page writes merge, exact single-page collision filtering, explicit cross-page `end_addr` invalidation, conservative multi-page buckets, host/kernel post-write invalidation, exact tracing, cross-TLB `IC IVAU`, and ARM64/x86 chain boundaries | immediate visibility for nonconforming self-modification without cache maintenance; global cross-thread x86 publication; old write-path throughput |
-| Native integration | `procfs_test`, `ishembed_smoke`, `codex_test` | fakefs, spawn, procfs, command path | RootFS provenance/license is trustworthy |
+| Native integration | `procfs_test`, `ishembed_smoke` | fakefs, spawn, procfs, general command path | RootFS provenance/license is trustworthy; compatibility with a particular user tool |
 | Sanitizers | ASan/UBSan and TSan where applicable | bounds, UAF, undefined behavior, and races on covered paths | every schedule is defect-free |
 | RootFS-free Swift | instance/session gates, shutdown retry, public API smoke | oneshot/session leases prevent old-ABI UAF, failure keeps the handle, old public signatures compile | every C call is cancellable or close is always bounded |
 | Swift manifest real link | `test-swift-ios.sh --manifest-binary` | Stage1 Swift still links the pre-publication v0.3.3 binary | new native symbols are public |
@@ -138,9 +138,8 @@ Important coverage includes:
   adjacent-page TLB-alias regression proves the last aligned A64 instruction at
   a page tail runs normally, while a misaligned PC traps without prefetching and
   evicting the starting page;
-- preservation of customized chroot Codex configuration while tightening it to
-  `0600`, default recreation after deletion, and no-overwrite rejection of
-  malicious symlinks, directories, and FIFOs.
+- chroot preparation repairs only general `/dev`, devpts, procfs, and `/root`
+  state and creates no Codex CLI configuration or other tool-specific state.
 
 ## JIT performance baseline
 
@@ -203,9 +202,7 @@ scripts/build-rootfs.sh --print-inputs
 scripts/build-rootfs.sh --print-identity
 scripts/build-rootfs.sh --verify-rootfs build/fs
 scripts/build-rootfs.sh --verify-bundle build
-scripts/run-host-tests.sh --no-codex --smoke
-# Full Codex guest path (prepares a separate test RootFS using network access):
-scripts/run-host-tests.sh
+scripts/run-host-tests.sh --smoke
 ```
 
 The runner explicitly passes `scripts/alpine-rootfs-pin.sh` to the builder and
@@ -225,15 +222,9 @@ inodes, 16-byte stat BLOBs, exactly one empty root, complete meta/data paths,
 and AArch64 supervisor/BusyBox digests. `fs`, tar, and checksums publish before
 the receipt commits the generation; replacement uses exchange to keep fs
 visible, failure rolls back in reverse, and success retains no prior generation.
-The runner holds RootFS/Codex locks from validation through the last consumer,
-so a concurrent builder cannot replace a tree during use. Valid runtime changes
-remain reusable and copying/editing the marker is insufficient. The
-`fs-codex` identity binds clean receipt/content, package, exact/tag request
-kind, VM/bin, provisioning inputs, and actual installed version. An exact
-request resolving to another version fails before publication; a tag binds its
-resolved version. Reuse also checks the package bin target, guest executable
-mode, and global-entry mapping. Mismatch forces provisioning, and a successful
-provision without matching layout/identity fails the runner.
+The runner holds the RootFS lock from validation through the last consumer, so
+a concurrent builder cannot replace the tree during use. Valid runtime changes
+remain reusable and copying/editing the marker is insufficient.
 
 The receipt represents lineage/an initial snapshot only: it binds the static
 marker and initial `fs.tar.gz`/`SHA256SUMS`. After runtime mutation,
@@ -250,14 +241,7 @@ four-artifact reuse, old architecture/pin/missing markers, altered supervisor,
 malformed SQLite, empty/corrupt/PID-reuse locks, concurrent builders, valid
 runtime mutation, every publish-step fault plus a TERM journal gap, use-phase
 lock contention, lock-FD isolation from a consumer's background process, and
-`fs-codex` base/requested/actual-version drift, exact-version mismatch, tag
-resolution, missing package/global entries, and status aggregation.
-The pure-C `provision_codex_format` regression separately covers the maximum
-validated 194-byte scoped package plus a 128-byte version/tag (a 323-byte npm
-target), and proves that a buffer one byte too small fails instead of silently
-truncating. The fixture also breaks the global entry's real host hardlink while
-preserving its fakefs inode, proving that host-backing/database disagreement
-cannot pass reuse admission.
+status aggregation.
 
 Host-test and production iOS iSH builds must include
 `-DISH_DISABLE_SKIP_BRK=1` in `c_args`. The runner strictly introspects an old

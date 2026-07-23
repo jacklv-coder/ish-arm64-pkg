@@ -235,18 +235,12 @@ instead of retaining `fs.previous.*`. `--print-identity` emits
 the schema-v2 recipe prefix covering the builder, supervisor, protocol headers,
 iSH revision/worktree/submodules, fakefsify origin, and Alpine pin. The marker
 also binds the actual fakefsify, AArch64 supervisor, BusyBox, and initial
-meta/data seal. The runner holds the RootFS/Codex locks from validation through
-the final consumer and checks the receipt, recipe, SQLite row types/16-byte
+meta/data seal. The runner holds the RootFS lock from validation through the
+final consumer and checks the receipt, recipe, SQLite row types/16-byte
 stats/root, complete meta/data paths, and critical digests while permitting
-valid runtime mutations. A derived `build/fs-codex` identity also binds the
-clean receipt/current content, package, exact/tag request kind, VM/bin,
-provisioning inputs, and installed version. Exact SemVer requests must equal the
-actual version byte for byte; tags record their resolved version. Reuse also
-validates the `package.json` bin, guest executable mode, and a safe global entry
-mapping to the package target; any mismatch forces reprovisioning. This identity
-is only for local
-development tests; it does not replace product RootFS provenance, licensing,
-final-content digest, or installation transaction.
+valid runtime mutations. The repository no longer provisions or tests Codex
+CLI. Callers may still explicitly install Node.js/npm as ordinary guest
+packages.
 `ROOTFS_RECEIPT` is a lineage/initial-snapshot record: it binds the static
 identity marker and the initial `fs.tar.gz`/`SHA256SUMS` produced at build time.
 After runtime writes mutate `fs`, `--verify-bundle` validates the current tree's

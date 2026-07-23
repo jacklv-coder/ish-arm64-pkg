@@ -265,7 +265,7 @@ int ish_embed_shutdown(ish_embed_instance_t *inst, uint32_t grace_ms);
 /* Legacy compatibility entry point. It validates a live instance and a
  * non-empty guest-absolute vm_root, but performs no filesystem operation.
  * Before every SPAWN using an absolute chroot_path, PID 1 revalidates device
- * nodes, devpts/procfs, and required runtime directories, repairing missing
+ * nodes, devpts/procfs, and the conventional root home, repairing missing
  * state where safe. This legacy function itself does not check whether vm_root
  * already exists. */
 int ish_embed_setup_vm_root(ish_embed_instance_t *inst, const char *vm_root);

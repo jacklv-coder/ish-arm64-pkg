@@ -317,16 +317,14 @@ caller source break. This does not deliver Stage2 callback queue/drop policy.
 ## Chroot preparation and isolation boundary
 
 Before spawning with an absolute `chroot_path`, guest PID 1 revalidates and
-repairs required device nodes, devpts/procfs mounts, and runtime directories as
-needed. It does not permanently cache a root as prepared, so a same-path RootFS
-replacement or lost mount is checked again.
+repairs required device nodes, devpts/procfs mounts, and the conventional
+`/root` home as needed. It does not permanently cache a root as prepared, so a
+same-path RootFS replacement or lost mount is checked again. The supervisor
+does not create Codex CLI configuration or any tool-specific directory.
 
-When `/root/.codex/config.toml` is missing, the supervisor fully writes a
-same-directory temporary file and publishes the default with an atomic,
-no-overwrite operation. An existing non-symlink regular file keeps all of its
-contents and only has its mode tightened to `0600`. A symlink, directory, FIFO,
-or other non-regular object fails the spawn before fork and is neither followed
-nor replaced.
+Node.js/npm remains an optional general-purpose guest capability. A caller may
+install and run it with `apk` in its own writable RootFS, but IshEmbed neither
+preinstalls it by default nor automatically installs an npm package.
 
 Chroot isolates only the filesystem view. Sessions share one iSH kernel, host
 process, memory budget, and attack surface. It is not a strong security sandbox.
@@ -395,19 +393,10 @@ reverse; success deletes the old generation with staging. SIGKILL/power loss
 cannot guarantee multi-path rollback, but receipt-last makes a partial
 generation fail validation and prevents reuse.
 
-The runner holds locks from validation and optional build/provision through the
-final test consumer, closing the validate-to-use replacement window. Reuse
-allows valid runtime meta/data mutation while rechecking the four-artifact
-receipt, recipe, database/storage consistency, and critical digests. The
-`fs-codex` identity additionally binds the clean marker/receipt/current content,
-package, exact/tag request kind, VM/bin, provision script/binary, verifier, and
-actual package.json version. Exact SemVer requests must match the actual version
-byte for byte; a tag may resolve differently, but both values are recorded.
-Validation also requires safe host backing and fakefs metadata for an
-executable guest package-bin target and a global symlink/hardlink that resolves
-exactly to it; any mismatch reprovisions. This remains only a
-development test-input identity, not PocketRoot's product RootFS manifest,
-distribution permission, or final installation-integrity guarantee.
+The runner holds the lock from validation and optional build through the final
+test consumer, closing the validate-to-use replacement window. Reuse allows
+valid runtime meta/data mutation while rechecking the four-artifact receipt,
+recipe, database/storage consistency, and critical digests.
 
 `ROOTFS_RECEIPT` is a lineage/initial-snapshot commit record. It binds the static
 identity marker, the initial `fs.tar.gz`, and its `SHA256SUMS`; it does not seal
