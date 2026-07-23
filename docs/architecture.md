@@ -175,8 +175,10 @@ idle/booting/running/shutting-down，并为每次 oneshot 持有调用 lease。s
 零计数窗口，直接把 lease 转交给 `IshSession`；只有 native session close 返回后才释放。
 shutdown 会先原子关闭新调用入口：只要仍有 oneshot 或 session lease，就立即返回
 `ISH_ERR_BUSY` 而不进入 v0.3.3 native shutdown；没有 lease 时才独占 shutdown。native
-失败会恢复同一 handle 和 running 状态，成功才清空 handle。这样 boot/shutdown、两个
-shutdown caller 以及 shutdown/call 均不会交错释放旧 ABI handle。
+返回 `ISH_ERR_BUSY` 会恢复同一 handle 和 running 状态，成功才清空 handle；其他
+shutdown 失败会隔离 handle，拒绝普通调用和再次 boot，但仍允许重试 shutdown 完成
+native 清理。这样 boot/shutdown、两个 shutdown caller 以及 shutdown/call 均不会交错
+释放旧 ABI handle。
 
 ## 线程与反压
 

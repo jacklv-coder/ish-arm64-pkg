@@ -102,6 +102,7 @@ static int g_active_call_waiting;
 static int g_release_active_call;
 static int g_terminate_count;
 static int g_signal_count;
+static int g_resize_count;
 static int g_session_close_count;
 static uint8_t g_session_control_race_type;
 static int g_session_control_admitted;
@@ -523,10 +524,12 @@ static void *fake_kernel_main(void *unused) {
             pthread_cond_broadcast(&g_fake_cond);
             pthread_mutex_unlock(&g_fake_lock);
             fake_emit_exit(sid, 0, 0);
-        } else if (type == ISH_FT_SIGNAL || type == ISH_FT_TERMINATE ||
+        } else if (type == ISH_FT_SIGNAL || type == ISH_FT_RESIZE ||
+                   type == ISH_FT_TERMINATE ||
                    type == ISH_FT_SESSION_CLOSE) {
             pthread_mutex_lock(&g_fake_lock);
             if (type == ISH_FT_SIGNAL) g_signal_count++;
+            else if (type == ISH_FT_RESIZE) g_resize_count++;
             else if (type == ISH_FT_TERMINATE) g_terminate_count++;
             else g_session_close_count++;
             if (g_mode == FAKE_BACKLOG_FRAMES &&
@@ -535,7 +538,7 @@ static void *fake_kernel_main(void *unused) {
             pthread_cond_broadcast(&g_fake_cond);
             pthread_mutex_unlock(&g_fake_lock);
             if (type == ISH_FT_SESSION_CLOSE ||
-                g_mode != FAKE_ONESHOT_HANG)
+                (type != ISH_FT_RESIZE && g_mode != FAKE_ONESHOT_HANG))
                 fake_emit_exit(sid, 137, 9);
         } else if (type == ISH_FT_SHUTDOWN) {
             if (g_mode == FAKE_DOUBLE_SHUTDOWN) {
@@ -1468,16 +1471,22 @@ static int test_session_control_close_order(enum retained_control_kind kind,
     pthread_join(control_thread, NULL);
     pthread_join(close_thread, NULL);
 
+    int *delivered_flag = type == ISH_FT_SIGNAL ? &g_signal_count :
+        type == ISH_FT_RESIZE ? &g_resize_count : &g_terminate_count;
+    if (control.rc == ISH_OK)
+        (void)wait_fake_flag(delivered_flag, 1000);
     pthread_mutex_lock(&g_fake_lock);
     int delivered = type == ISH_FT_SIGNAL ? g_signal_count :
-        type == ISH_FT_TERMINATE ? g_terminate_count : 0;
+        type == ISH_FT_RESIZE ? g_resize_count : g_terminate_count;
     int close_delivered = g_session_close_count;
     pthread_mutex_unlock(&g_fake_lock);
     int probe_rc = ish_embed_setup_vm_root(inst,
                                            "/srv/vms/after-control-close");
     int rejected = control.rc == ISH_ERR_BROKEN_PIPE ||
         control.rc == ISH_ERR_NOT_RUNNING;
-    int ok = rejected && delivered == 0 && close_delivered == 0 &&
+    int ordered = (rejected && delivered == 0) ||
+        (control.rc == ISH_OK && delivered == 1);
+    int ok = ordered && close_delivered == 0 &&
         close_call.elapsed_ms <= 1500 &&
         probe_rc == ISH_ERR_NOT_RUNNING;
     if (!ok) {
@@ -1490,7 +1499,7 @@ static int test_session_control_close_order(enum retained_control_kind kind,
     int shutdown_rc = ish_embed_shutdown(inst, 2000);
     if (shutdown_rc != ISH_OK) ok = 0;
     if (ok)
-        fprintf(stderr, "%s cannot report success after close: OK\n", label);
+        fprintf(stderr, "%s cannot follow SESSION_CLOSE: OK\n", label);
     return ok ? 0 : 1;
 }
 
