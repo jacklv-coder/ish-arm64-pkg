@@ -4,22 +4,36 @@
 
 Chinese is the primary changelog and this file is its maintained English mirror.
 
-## v0.4.0-abi.1 (planned ABI-transition prerelease)
+## v0.4.0-abi.2 (planned Stage1 maintenance prerelease)
+
+This is a compatibility maintenance release after `v0.4.0-abi.1`. It remains a
+prerelease and is **not stable v0.4.0**.
+
+- `third_party/ish` advances to `71f940a`. Address-space teardown now serializes
+  `/proc/<pid>/statm`, `maps`, and `mem` access through `general_lock`, avoiding
+  Darwin SIGTRAP when a `pthread_rwlock` is destroyed with queued waiters.
+- A task's `general_lock` is initialized before its pointer is published in the
+  PID table, so procfs cannot observe a task whose lock initialization is
+  incomplete.
+- The public C ABI, wire protocol, and Swift API are unchanged. RootFS remains
+  outside the Release.
+- This version does not implement a native Agent Loop and does not install or
+  run Codex CLI inside the iOS app. Node.js/npm remain independent optional
+  guest packages.
+
+## v0.4.0-abi.1 (published ABI-transition prerelease)
 
 This is Stage1 of the native-first / Swift-second sequence. It is **not stable
 v0.4.0**.
 
-### Publication state
+### Publication transaction
 
-- After the Stage1 PR merges and before the Release is published,
-  `Package.swift` still pins the upstream v0.3.3 XCFramework URL/checksum. This
-  is an intentional, verifiable state.
-- `scripts/release.sh v0.4.0-abi.1` creates a manifest-only release commit only
-  after the new XCFramework, Corresponding Source, iOS 18 real links, and the
-  release-transaction gates all pass.
+- `v0.4.0-abi.1` was produced by the release transaction with its XCFramework,
+  Corresponding Source, and manifest-only release commit. `Package.swift`
+  currently pins that public asset.
 - RootFS content is neither committed, packaged, nor uploaded by the release
-  script. The current PR also commits no prebuilt XCFramework or guest binary;
-  a later release transaction alone produces binaries.
+  script. Prebuilt XCFramework and guest binaries are produced only by the
+  release transaction and are not committed directly to source branches.
 
 ### Delivered in Stage1: native runtime
 
@@ -137,5 +151,5 @@ v0.4.0**.
 
 ## v0.3.3
 
-Before publication of the transition Release, the Stage1 manifest still points
-to this published binary. Refer to that tag for historical details.
+Before the first transition Release, the Stage1 manifest pointed to this binary.
+Refer to that tag for historical details.

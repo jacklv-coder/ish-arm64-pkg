@@ -15,16 +15,17 @@ and simulator slices are arm64.
 
 ## Current phase: native ABI transition
 
-This branch is Stage1, intended for the `v0.4.0-abi.1` **native ABI transition**.
-It is neither stable `v0.4.0` nor the complete v0.4 Swift API. Keep these four
-version surfaces distinct:
+The default branch has published `v0.4.0-abi.1` and is preparing the compatible
+maintenance prerelease `v0.4.0-abi.2`. Both belong to the Stage1 **native ABI
+transition**. Neither is stable `v0.4.0` or the complete v0.4 Swift API. Keep
+these four version surfaces distinct:
 
-| Surface | After Stage1 merge, before publication | After `v0.4.0-abi.1` publication |
+| Surface | Current `v0.4.0-abi.1` | Planned `v0.4.0-abi.2` |
 | --- | --- | --- |
-| Public C ABI | `ISH_EMBED_ABI_VERSION == 1`; additive compatible symbols exist in source | Still ABI 1; the transition XCFramework includes the symbols |
+| Public C ABI | `ISH_EMBED_ABI_VERSION == 1`; compatible symbols are published | Still ABI 1, with no new public symbols |
 | Internal wire protocol | exact-match v4 between host and embedded supervisor | still v4; this is not the public C ABI version |
-| `Package.swift` | still pins the upstream v0.3.3 URL/checksum | the release transaction creates a manifest-only release commit pinned to the transition binary |
-| Swift source | remains v0.3.3-ABI compatible and does not call retain/release | remains old-ABI compatible and can use the transition binary |
+| `Package.swift` | pins the public `v0.4.0-abi.1` URL/checksum | the release transaction creates a manifest-only release commit pinned to the maintenance binary |
+| Swift source | remains v0.3.3-ABI compatible and does not call retain/release | keeps the same Swift API and old-ABI usage |
 
 Stage1 native code adds session retain/release, a joinable kernel thread,
 soft-halt, exact wire v4, and complete session close. The existing Swift wrapper
@@ -87,19 +88,16 @@ gives those narrow differences independent PRs, CI, and an exact gitlink, making
 PocketRoot builds and releases reproducible. We do not directly rewrite somebody
 else's local upstream repository; generally useful fixes can still be contributed
 to [iSH upstream](https://github.com/ish-app/ish), while the fork carries project
-gates until upstream accepts and releases them. This source, test, and
-documentation change includes neither RootFS content nor any prebuilt
-XCFramework/guest binary; binaries may be produced and published only by a later
-release transaction after its gates pass.
+gates until upstream accepts and releases them. The current `v0.4.0-abi.2`
+source change includes neither RootFS content nor any prebuilt XCFramework/guest
+binary; binaries may be produced and published only by a later release
+transaction after its gates pass.
 
 ## Installation status
 
-Before `v0.4.0-abi.1` is actually published, this fork has no installable Stage1
-artifact. [`Package.swift`](Package.swift) still points to v0.3.3. That is the
-expected pre-release state; do not confuse new native source in the worktree
-with a manifest that already references the new binary.
-
-After the transition Release is published and verified, use Xcode's
+`v0.4.0-abi.1` is public and [`Package.swift`](Package.swift) currently pins it.
+Until `v0.4.0-abi.2` is published, the manifest keeps pointing at that verified
+asset instead of advertising a future 404 URL. Use Xcode's
 **File → Add Package Dependencies…** with:
 
 ```text
@@ -109,6 +107,10 @@ https://github.com/jacklv-coder/ish-arm64-pkg
 Select a version whose tag, `libIshKernel.xcframework.zip`, Corresponding Source,
 and manifest URL/checksum all match. Consumer projects do not need Meson, Zig,
 or LLVM.
+
+`v0.4.0-abi.2` only fixes procfs/task-exit lifecycle races. It does not implement
+a native Agent Loop or install Codex CLI in the app. Node.js/npm remain optional
+choices of the RootFS/guest package-management flow, not runtime requirements.
 
 ## Swift usage
 

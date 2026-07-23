@@ -4,18 +4,30 @@
 
 本仓库以中文变更日志为主，并同步维护英文镜像。
 
-## v0.4.0-abi.1（计划中的 ABI 过渡预发布）
+## v0.4.0-abi.2（计划中的 Stage1 维护预发布）
+
+这是 `v0.4.0-abi.1` 之后的兼容性维护版本，仍是 prerelease，**不是稳定
+v0.4.0**。
+
+- `third_party/ish` 更新到 `71f940a`，在 task 地址空间退出期间用
+  `general_lock` 串行化 `/proc/<pid>/statm`、`maps` 和 `mem` 访问，避免 Darwin
+  销毁仍有等待者的 `pthread_rwlock` 时触发 SIGTRAP。
+- task 的 `general_lock` 在 PID 表发布 task 指针前初始化，避免 procfs 观察到尚未完成
+  锁初始化的 task。
+- 公开 C ABI、wire protocol 和 Swift API 均不变；RootFS 不进入 Release。
+- 本版本不实现原生 Agent Loop，也不会在 iOS App 内安装或运行 Codex CLI。
+  Node.js/npm 仍可作为独立的可选 guest 包使用。
+
+## v0.4.0-abi.1（已发布的 ABI 过渡预发布）
 
 这是 native-first / Swift-second 发布序列的 Stage1，**不是稳定 v0.4.0**。
 
-### 发布状态
+### 发布事务
 
-- Stage1 PR 合入后、Release 发布前，`Package.swift` 仍固定上游 v0.3.3
-  XCFramework 的 URL/checksum；这是刻意保留的可验证状态。
-- `scripts/release.sh v0.4.0-abi.1` 只有在新 XCFramework、对应源码、iOS 18 真链接和
-  发布事务门禁全部通过后，才生成只更新 manifest 的 release commit。
-- RootFS 不提交、不打包，也不由 release 脚本上传；当前 PR 同样不提交预构建
-  XCFramework 或 guest binary，二进制只由后续发布事务生成。
+- `v0.4.0-abi.1` 已通过发布事务生成 XCFramework、对应源码和只更新 manifest 的
+  release commit；`Package.swift` 当前固定该公开资产。
+- RootFS 不提交、不打包，也不由 release 脚本上传；预构建 XCFramework 与 guest
+  binary 只由发布事务生成，不直接提交到源码分支。
 
 ### Stage1 已交付：native runtime
 
@@ -97,4 +109,4 @@
 
 ## v0.3.3
 
-Stage1 的 manifest 在过渡 Release 发布前仍引用此已发布 binary；历史详情以对应标签为准。
+Stage1 首次过渡 Release 发布前曾引用此 binary；历史详情以对应标签为准。

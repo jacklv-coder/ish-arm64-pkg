@@ -3,24 +3,26 @@
 [简体中文](releasing.md) | English
 
 This guide is for maintainers publishing the XCFramework and matching
-Corresponding Source. Stage1 targets `v0.4.0-abi.1`, an ABI-transition
-prerelease that is **not stable v0.4.0**. Publication creates a public GitHub
-Release and updates the default branch, so run it only with explicit release
-authorization.
+Corresponding Source. `v0.4.0-abi.1` is already public; the only currently
+authorized next tag is the compatible maintenance release `v0.4.0-abi.2`. It
+remains an ABI-transition prerelease that is **not stable v0.4.0**. Publication
+creates a public GitHub Release and updates the default branch, so run it only
+with explicit release authorization.
 
-## State before and after Stage1 publication
+## State before and after `v0.4.0-abi.2` publication
 
-### After PR merge, before Release publication
+### After the maintenance PR merges, before Release publication
 
-- `Package.swift` still pins the published v0.3.3 URL/checksum;
+- `Package.swift` still pins the published `v0.4.0-abi.1` URL/checksum;
 - Swift source remains v0.3.3-ABI compatible and does not call retain/release;
-- the repository contains additive public C ABI 1 and internal wire v4 source;
-- there is no installable Stage1 binary.
+- repository source contains the reviewed procfs/address-space teardown
+  synchronization and task-publication lock-initialization fixes;
+- there is no installable `v0.4.0-abi.2` binary.
 
 This intermediate state is intentional: the default branch never advertises an
 unpublished asset URL that returns 404.
 
-### After successful `v0.4.0-abi.1` publication
+### After successful `v0.4.0-abi.2` publication
 
 - the release commit changes only `Package.swift`, pinning the new XCFramework
   URL/checksum;
@@ -30,6 +32,10 @@ unpublished asset URL that returns 404.
 - Swift is still the old-ABI-compatible layer; the complete Swift lifecycle,
   typed statuses, and Terminal/VT changes remain Stage2;
 - RootFS remains outside all release assets.
+
+This maintenance release does not implement a native Agent Loop or install/run
+Codex CLI in the app. Node.js/npm remain optional packages of the RootFS/guest
+package-management flow, not runtime requirements.
 
 ## Prerequisites
 
@@ -42,7 +48,7 @@ unpublished asset URL that returns 404.
 4. Install `git`, `gh`, `swift`, `zip`, `shasum`, `python3`, `curl`, `zig`,
    Meson, Ninja, LLVM/lld, and other build prerequisites.
 5. Initialize `third_party/ish`; the parent gitlink must name the reviewed revision.
-6. Luna review must report no P1/P2, and CI, iOS 18 real links, native sanitizers,
+6. Codex CR must report no P1/P2, and CI, iOS 18 real links, native sanitizers,
    documentation, and supply-chain gates must pass.
 7. Explicitly confirm that this run publishes runtime/Corresponding Source only,
    never RootFS.
@@ -65,16 +71,16 @@ scripts/verify-ios-artifact.sh
 scripts/test-swift-ios.sh --local-binary
 ```
 
-`--manifest-binary` proves that Stage1 Swift still links the pre-publication
-v0.3.3 binary. `--local-binary` proves that the same Swift source links the
-transition XCFramework. Both boundaries are required.
+`--manifest-binary` proves that Stage1 Swift still links the currently pinned
+`v0.4.0-abi.1` binary. `--local-binary` proves that the same Swift source links
+the maintenance XCFramework. Both boundaries are required.
 
 ## Execute
 
 After confirming that the tag is absent and publication is authorized:
 
 ```sh
-scripts/release.sh v0.4.0-abi.1
+scripts/release.sh v0.4.0-abi.2
 ```
 
 The script derives GitHub `prerelease=true` from the SemVer suffix. Only
@@ -82,8 +88,8 @@ The script derives GitHub `prerelease=true` from the SemVer suffix. Only
 that this is not stable v0.4, describes native lifecycle/retain-release/
 join-soft-halt/wire v4, and records the Swift and RootFS boundaries.
 In addition to strict SemVer validation, the Stage1 policy rejects every tag
-except `v0.4.0-abi.1`. An accidental `v0.4.0` therefore fails before any tag,
-draft, or asset is written.
+except `v0.4.0-abi.2`. Reusing `v0.4.0-abi.1` or accidentally entering
+`v0.4.0` therefore fails before any tag, draft, or asset is written.
 
 Do not substitute `v0.4.0`. A stable tag must wait for a separate decision after
 Stage2 integration, migration, and regression testing.
@@ -129,9 +135,9 @@ hashing, licensing, and distribution.
 ## Post-publication acceptance
 
 ```sh
-gh release view v0.4.0-abi.1 --repo jacklv-coder/ish-arm64-pkg
+gh release view v0.4.0-abi.2 --repo jacklv-coder/ish-arm64-pkg
 git fetch origin --tags
-git show v0.4.0-abi.1:Package.swift
+git show v0.4.0-abi.2:Package.swift
 git pull --ff-only origin main
 scripts/test-swift-ios.sh --manifest-binary
 ```
@@ -163,10 +169,10 @@ Never force-push over unknown objects or delete a tag/draft by name alone. Keep
 the printed staging path, Release id, commit, tag-object OID, and digests for
 manual recovery.
 
-## Stage2 entry gate
+## PocketRoot upgrade gate
 
-Stage2 may integrate Swift retain/release lifecycle, typed statuses, and
-Terminal/VT changes only after the public `v0.4.0-abi.1` assets, manifest update,
-and post-publication real link all pass. Stage2 still needs an independent
-review, tests, documentation, and release decision. The transition prerelease
-does not mean stable v0.4 is complete.
+PocketRoot may move its dependency from `v0.4.0-abi.1` to the maintenance
+release only after the public `v0.4.0-abi.2` assets, manifest update, and
+post-publication real link all pass, followed by its Xcode 16/iOS 18 gates.
+Stage2 and a native Agent Loop are outside this release. Either still requires
+an independent plan, review, tests, documentation, and release decision.

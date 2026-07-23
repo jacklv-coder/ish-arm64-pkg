@@ -15,24 +15,24 @@ iOS 18 二进制、内部 wire v4 和发布供应链处于同一可解释状态�
 | native 集成 | `procfs_test`、`ishembed_smoke` | fakefs、spawn、procfs、通用命令链路 | RootFS 来源/许可可信；特定用户工具兼容性 |
 | sanitizer | ASan/UBSan，必要时 TSan | 已覆盖路径上的越界、UAF、未定义行为和数据竞争 | 所有调度组合都无缺陷 |
 | Swift RootFS-free | instance/session gate、shutdown retry、公开 API smoke | oneshot/session lease 阻止旧 ABI UAF、失败保留 handle、旧公开签名可编译 | 任意 C 调用都可取消或 close 始终有界 |
-| Swift manifest 真链接 | `test-swift-ios.sh --manifest-binary` | Stage1 Swift 仍与发布前 v0.3.3 binary 链接 | 新 native 符号已公开 |
-| Swift local 真链接 | `test-swift-ios.sh --local-binary` | 同一 Swift 与待发布过渡 XCFramework 链接 | GitHub 资产已发布 |
+| Swift manifest 真链接 | `test-swift-ios.sh --manifest-binary` | Stage1 Swift 与当前 `v0.4.0-abi.1` binary 链接 | `v0.4.0-abi.2` 修复已公开 |
+| Swift local 真链接 | `test-swift-ios.sh --local-binary` | 同一 Swift 与待发布维护 XCFramework 链接 | GitHub 资产已发布 |
 | XCFramework | `build-ios.sh` + symbol/final-link 检查 | device/simulator arm64、最低 iOS 18、必需符号 | App 产品逻辑 |
 | 文档/脚本 | docs 正负门禁、shell syntax、策略测试 | 双语链接、失败诊断、release notes/version/tag/source policy | 文档本身等于实现 |
 
 ## 先确认 Stage1 状态
 
-发布前应同时满足：
+`v0.4.0-abi.2` 发布前应同时满足：
 
 - `ISH_EMBED_ABI_VERSION` 为 1；
 - `ISH_PROTO_VERSION` 为 4；
 - Swift 源不调用 `ish_embed_session_retain/release`；
-- `Package.swift` 仍固定 v0.3.3；
+- `Package.swift` 仍固定已公开的 `v0.4.0-abi.1`；
 - 本地构建的新 XCFramework 导出 retain/release、join/soft-halt 等必需符号；
 - RootFS 没有出现在 Git diff、XCFramework、source archive 或 Release 清单中。
 
-发布后才把“manifest 固定到 `v0.4.0-abi.1`”加入预期。不能用发布后的预期否定
-发布前的正确状态。
+发布后才把“manifest 固定到 `v0.4.0-abi.2`”加入预期。不能用发布后的预期否定
+发布前仍引用已验证 `v0.4.0-abi.1` 的正确状态。
 
 ## 快速元数据与脚本门禁
 
@@ -257,7 +257,7 @@ XCFramework 字节。
 当前 100 ms poll 后重过 gate；其他已进入 C 调用的返回时间决定 close 上界，旧/自定义
 supervisor 下永久阻塞的非 read 调用会让 close 继续等待。
 
-发布前先验证旧 binary：
+发布前先验证当前 manifest binary：
 
 ```sh
 scripts/test-swift-ios.sh --manifest-binary
@@ -275,12 +275,12 @@ scripts/test-swift-ios.sh \
 
 Stage1 的 Swift 目标是旧 ABI 兼容，不应在这里加入 native retain/release、typed status
 或新 Terminal/VT 行为的断言。完整 borrow/cancel/typed lifecycle 测试随 Stage2 引入。
-过渡 Release 发布后，再运行 `--manifest-binary` 证明更新后的 manifest 能从公开 URL
+维护 Release 发布后，再运行 `--manifest-binary` 证明更新后的 manifest 能从公开 URL
 真链接。
 
 ## CR 与提交门禁
 
-重要 push 前、PR 合并前使用 GPT-5.6 Luna 检查：
+重要 push 前、PR 合并前使用 Codex CR 检查：
 
 - diff 是否超出 Stage1 native ABI 范围；
 - session/instance 并发、引用、shutdown 与错误路径；
