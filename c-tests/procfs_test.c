@@ -345,6 +345,20 @@ static int run_in_root(ish_embed_instance_t *inst, const char *script,
     return ec;
 }
 
+/* ishsv's adopted-child cleanup scans the supervisor-visible root /proc, not
+ * a per-VM mount. The embedded boot path must establish this mount before PID 1
+ * starts; otherwise an empty RootFS directory makes two clean scans look valid
+ * and lets a double-fork/setsid descendant escape. */
+static int case_supervisor_root_procfs(ish_embed_instance_t *inst) {
+    int rc = run_in_root(
+        inst,
+        "test -r /proc/1/stat && test -r /proc/self/stat",
+        5000);
+    int fail = rc != 0;
+    fprintf(stderr, "supervisor root procfs:%s\n", fail ? "FAIL" : "OK");
+    return fail;
+}
+
 /* Clone /srv/vms/.template → /srv/vms/proctest if not present. The first
  * chrooted spawn below makes the supervisor mount /proc, /dev, /dev/pts in
  * guest context, so this test also covers automatic VM-root initialization. */
@@ -381,12 +395,13 @@ int main(void) {
         return 1;
     }
 
+    int fails = case_supervisor_root_procfs(inst);
+
     if (setup_test_vm(inst) != 0) {
         ish_embed_shutdown(inst, 2000);
         return 1;
     }
 
-    int fails = 0;
     fails += case_proc_self_status(inst);
     fails += case_proc_self_statm(inst);
     fails += case_proc_self_stat(inst);

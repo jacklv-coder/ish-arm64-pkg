@@ -233,6 +233,8 @@ Stage1 Swift 尚未交付新的 typed status 和 Terminal callback 有界投递�
 - supervisor 还是 child subreaper。double-fork/`setsid` 脱离 tracked group 的后代最终会
   被 PID 1 收养；它会排除仍受其他 session/TTY 管理的进程，按精确 PID 杀死并回收未跟踪
   child，再要求连续两次 `/proc` 扫描为空，才发送成功 `EXITED`。
+- 嵌入式启动路径会在启动 PID 1 前挂载 supervisor 可见的根 procfs；收养 child 的扫描以
+  这个根挂载为准，各 VM 的 procfs 仍是独立挂载，只服务对应 chroot 内的进程。
 - 扫描、kill、reap 或两秒清理期限任一失败时，supervisor 采用 instance-wide fail-close：
   对该 guest 内进程执行兜底清理，退出且不发送成功 `EXITED`/`SHUTDOWN_ACK`。因此无法证明
   隔离边界已恢复时，协议会失败关闭而不是报告一次看似正常的 session 完成。

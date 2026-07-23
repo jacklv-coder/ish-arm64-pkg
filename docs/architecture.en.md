@@ -305,6 +305,9 @@ caller source break. This does not deliver Stage2 callback queue/drop policy.
   PID 1 excludes processes still owned by another session/TTY, kills and reaps
   an untracked child by exact PID, and requires two consecutive clean `/proc`
   scans before publishing successful `EXITED`.
+- The embedded boot path mounts a supervisor-visible root procfs before starting
+  PID 1. This root mount is the authority for adopted-child scans; per-VM procfs
+  mounts remain separate and serve processes inside each chroot.
 - A scan, kill, reap, or two-second cleanup-deadline failure triggers an
   instance-wide fail-close: the supervisor performs guest-wide last-resort
   cleanup, exits, and emits neither successful `EXITED` nor `SHUTDOWN_ACK`.
