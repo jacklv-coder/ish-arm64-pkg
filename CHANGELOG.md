@@ -19,7 +19,7 @@
 
 ### Stage1 已交付：native runtime
 
-- `third_party/ish` 使用绝对 SSH URL，SwiftPM 与干净 checkout 不再把相对子模块地址
+- `third_party/ish` 使用绝对 SSH-over-443 URL，SwiftPM 与干净 checkout 不再把相对子模块地址
   误解析到本地 package repository cache，并保持仓库的 SSH 拉取约定；无 SSH 私钥的
   GitHub hosted CI 只在子模块 checkout 命令内使用公开 HTTPS 只读重写。
 - 公开 C ABI 版本仍为 `ISH_EMBED_ABI_VERSION == 1`；新增 session retain/release、

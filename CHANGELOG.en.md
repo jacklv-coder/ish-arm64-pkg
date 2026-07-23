@@ -23,7 +23,7 @@ v0.4.0**.
 
 ### Delivered in Stage1: native runtime
 
-- `third_party/ish` uses an absolute SSH URL so SwiftPM and clean checkouts
+- `third_party/ish` uses an absolute SSH-over-443 URL so SwiftPM and clean checkouts
   cannot resolve a relative submodule address into a local package repository
   cache, while retaining the repository's SSH fetch policy. GitHub-hosted CI,
   which has no SSH private key, applies a read-only public HTTPS rewrite only

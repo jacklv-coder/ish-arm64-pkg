@@ -11,12 +11,18 @@ binary already published.”
 
 ```sh
 git rev-parse HEAD
+git submodule sync -- third_party/ish
+git submodule update --init --checkout -- third_party/ish
 git submodule status third_party/ish
 rg 'ISH_EMBED_ABI_VERSION' include/ishembed.h
 rg 'ISH_PROTO_VERSION' protocol/proto.h
 rg -n 'url:|checksum:' Package.swift
 git status --short
 ```
+
+`git submodule sync` updates an old checkout's cached submodule URL in
+`.git/config` to the current SSH-over-443 address in `.gitmodules`; editing
+`.gitmodules` alone does not update that cache.
 
 Also record Xcode/Swift/Zig versions, runtime platform, XCFramework origin and
 checksum, and RootFS provenance, size, and SHA-256. Without this matrix, logs

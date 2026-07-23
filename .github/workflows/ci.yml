@@ -28,7 +28,8 @@ jobs:
 
       - name: Check out pinned iSH source
         run: |
-          git -c 'url.https://github.com/.insteadOf=git@github.com:' \
+          git submodule sync -- third_party/ish
+          git -c 'url.https://github.com/.insteadOf=ssh://git@ssh.github.com:443/' \
             submodule update --init --checkout -- third_party/ish
           test "$(git -C third_party/ish rev-parse HEAD)" = \
             "$(git ls-tree HEAD third_party/ish | awk '{print $3}')"
