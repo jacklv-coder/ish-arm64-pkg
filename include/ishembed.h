@@ -217,6 +217,11 @@ int ish_embed_session_read(ish_embed_session_t *s,
 int ish_embed_session_write(ish_embed_session_t *s,
                             const uint8_t *buf, size_t len);
 
+/* Outbound operations on one retained session are synchronized with close. A
+ * successful write, signal, resize, terminate, or stdin close is completely
+ * ordered before SESSION_CLOSE; calls that overlap close either finish first
+ * or fail without reporting a later control frame as delivered. */
+
 /* Send a Unix signal to the tracked command's process group. signum is the
  * standard Linux signal number (SIGINT=2, SIGTERM=15, ...). For a TTY shell,
  * this direct operation deliberately does not retarget a foreground job;

@@ -455,8 +455,11 @@ final class IshInstanceCallGate: @unchecked Sendable {
         }
     }
 
-    /// Commit native destruction only on success. A failed native shutdown
-    /// leaves the same handle available for calls and a later retry.
+    /// Commit native destruction on success. Recoverable native failures leave
+    /// the same handle available for calls and a later retry, but timeout is
+    /// terminal: native shutdown has already closed admission and quarantined
+    /// the runtime, so re-publishing that handle would make every later Swift
+    /// call pass this gate only to fail with NOT_RUNNING in C.
     func finishShutdown(attempted: OpaquePointer, result: Int32) {
         lock.lock()
         guard case .shuttingDown(let current) = state,
@@ -464,7 +467,9 @@ final class IshInstanceCallGate: @unchecked Sendable {
             lock.unlock()
             preconditionFailure("finishShutdown without its reserved transition")
         }
-        state = result == ishOK ? .consumed : .running(current)
+        state = result == ishOK || result == ishErrTimeout
+            ? .consumed
+            : .running(current)
         lock.unlock()
     }
 
