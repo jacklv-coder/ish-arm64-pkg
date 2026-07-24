@@ -4,7 +4,21 @@
 
 本仓库以中文变更日志为主，并同步维护英文镜像。
 
-## v0.4.0-abi.2（计划中的 Stage1 维护预发布）
+## v0.4.0-abi.3（计划中的 Stage1 维护预发布）
+
+这是 `v0.4.0-abi.2` 之后的兼容性维护版本，仍是 prerelease，**不是稳定
+v0.4.0**。
+
+- `third_party/ish` 更新到 `5f7535e`，将 guest `uname` 的所有固定宽度字段限制为
+  Linux ABI 的 65 字节并保证 NUL 结尾，避免较长的宿主 hostname 在 Xcode 16 /
+  iOS 18 加固 libc 下触发 `__strcpy_chk` SIGTRAP。
+- Linux、macOS arm64 和 iOS 构建路径新增或复用了有界截断、缓冲区完整性及真实
+  guest `uname -a` 回归。
+- 公开 C ABI、wire protocol 和 Swift API 均不变；RootFS 不进入 Release。
+- 本版本不实现原生 Agent Loop，也不会在 iOS App 内安装或运行 Codex CLI。
+  Node.js/npm 仍可作为独立的可选 guest 包使用。
+
+## v0.4.0-abi.2（已发布的 Stage1 维护预发布）
 
 这是 `v0.4.0-abi.1` 之后的兼容性维护版本，仍是 prerelease，**不是稳定
 v0.4.0**。

@@ -26,7 +26,7 @@ git status --short
 来源、大小和 SHA-256。没有这组信息，后续日志可能来自不同状态。
 
 当前正确组合是：C ABI 1、wire v4、Swift 不调用 retain/release、manifest 指向已公开
-的 `v0.4.0-abi.1`。发布 `v0.4.0-abi.2` 后，只有 manifest URL/checksum 应切到维护资产。
+的 `v0.4.0-abi.2`。发布 `v0.4.0-abi.3` 后，只有 manifest URL/checksum 应切到维护资产。
 
 ## 链接缺少 retain/release 或其他符号
 
@@ -44,20 +44,20 @@ nm -gU path/to/libIshKernel.a | awk '{print $NF}' | sort -u \
   旧 ABI 兼容 Swift，而不是扩大本次维护发布范围。
 - 如果检查的是本地 Stage1 XCFramework 而符号缺失，说明构建用了旧 commit、旧 gitlink
   或缓存；用隔离 build 路径重建。
-- 如果 `v0.4.0-abi.2` 已发布但 manifest 仍是 `v0.4.0-abi.1`，检查 release
+- 如果 `v0.4.0-abi.3` 已发布但 manifest 仍是 `v0.4.0-abi.2`，检查 release
   commit/default branch fast-forward 是否完成；不要手工猜 checksum。
 
 ## Package.swift 看起来“还没更新”
 
-维护 PR 合入到 Release 发布前，manifest 固定 `v0.4.0-abi.1` 是预期状态。发布脚本先
+维护 PR 合入到 Release 发布前，manifest 固定 `v0.4.0-abi.2` 是预期状态。发布脚本先
 从合入 commit 重建/验证资产，再创建只更新 manifest 的 release commit，先公开并校验
 资产，最后 fast-forward 默认分支。这样默认分支不会引用 404 URL。
 
-只有已经确认 `v0.4.0-abi.2` Release 公开后，manifest 仍旧才是异常。此时检查：
+只有已经确认 `v0.4.0-abi.3` Release 公开后，manifest 仍旧才是异常。此时检查：
 
 ```sh
-gh release view v0.4.0-abi.2 --repo jacklv-coder/ish-arm64-pkg
-git ls-remote --tags origin refs/tags/v0.4.0-abi.2
+gh release view v0.4.0-abi.3 --repo jacklv-coder/ish-arm64-pkg
+git ls-remote --tags origin refs/tags/v0.4.0-abi.3
 git fetch origin
 git log --oneline --decorate -5 origin/main
 ```
@@ -74,6 +74,17 @@ git log --oneline --decorate -5 origin/main
    `supervisorGuestPath` 会跳过内嵌安装和这项默认摘要校验，调用方必须保证
    guest-absolute path、静态 AArch64 ELF、执行模式、完整性、来源与 wire v4 匹配。
 4. 保留 `kernelLogFD` 指向的日志。日志是 best-effort，不能替代返回码。
+
+## guest `uname` 触发 SIGTRAP
+
+症状：guest 启动或 shell 探测系统信息时退出，crash stack 包含
+`__chk_fail_overflow`、`__strcpy_chk`、`do_uname` 和 `sys_uname`。这通常由超过
+Linux `new_utsname` 65 字节字段宽度的宿主 hostname 触发。
+
+- `v0.4.0-abi.2` 不包含该修复；不要通过缩短 CI runner 名称掩盖问题。
+- 待发布的 `v0.4.0-abi.3` 将所有 guest `uname` 固定宽度字段有界截断并保证 NUL 结尾。
+- 源码验证可运行 iSH 的 `uname` 单测和 `scripts/run-host-tests.sh --smoke`；发布后还应
+  在 Xcode 16 / iOS 18 门禁中确认真实 guest `uname -a` 成功。
 
 若失败来自本地 `scripts/run-host-tests.sh`，先运行
 `scripts/build-rootfs.sh --print-identity`，再运行

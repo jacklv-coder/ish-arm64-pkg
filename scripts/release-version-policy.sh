@@ -5,7 +5,7 @@
 # existing tag and accidentally creating a stable tag before Stage2 is
 # integrated and separately authorized.
 ish_release_stage1_version_allowed() {
-    [[ "$1" == "v0.4.0-abi.2" ]]
+    [[ "$1" == "v0.4.0-abi.3" ]]
 }
 
 # Call only after the release entry point has validated strict SemVer.
@@ -27,15 +27,17 @@ ish_release_abi_transition_notes() {
 
 这不是稳定 v0.4。本预发布交付 native lifecycle 基础：session
 retain/release、可等待 kernel thread、soft-halt 与内部精确匹配 wire protocol v4。
-本维护版本还修复 procfs 读取与 task 地址空间退出之间的锁生命周期竞态。
+本维护版本还会把 guest `uname` 的固定宽度字段限制为 Linux ABI 的 65 字节，
+避免过长宿主 hostname 在加固 libc 下触发 SIGTRAP。
 公开 C ABI 版本仍为 1。Swift 源仍保持 v0.3.3 ABI 兼容且不调用 retain/release；
 完整 Swift lifecycle、类型化状态与 Terminal/VT 改造将在 Stage2 交付。
 本 Release 不包含 RootFS，发布脚本也不会上传 RootFS。
 
 This is not stable v0.4. It delivers the native lifecycle foundation: session
 retain/release, a joinable kernel thread, soft-halt, and internal exact-match
-wire protocol v4. This maintenance release also fixes lock-lifecycle races
-between procfs reads and task address-space teardown. The public C ABI remains
+wire protocol v4. This maintenance release also bounds fixed-width guest
+`uname` fields to the 65-byte Linux ABI, preventing long host names from
+triggering fortified-libc SIGTRAP. The public C ABI remains
 version 1. Swift source remains v0.3.3-ABI compatible and does not call
 retain/release; the complete Swift
 lifecycle, typed statuses, and Terminal/VT changes remain Stage2. This Release
