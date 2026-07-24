@@ -249,8 +249,9 @@ XCFramework 字节。
 - shutdown 的 busy 状态恢复同一 running handle；timeout 等终态失败隔离普通调用但允许
   shutdown 清理重试；成功 shutdown 消耗进程唯一 lifecycle，后续 boot 在进入 native 前
   即被拒绝；
-- oneshot/read 的 NaN/无穷 timeout 在进入 native 前返回 invalid-argument，正的亚毫秒
-  oneshot timeout 至少转换为 1 ms；
+- oneshot/read 的 NaN/无穷 timeout 在进入 native 前返回 invalid-argument；spawn
+  budget 会扣除 Swift 参数封送时间，剩余不足 1 ms 时在 native entry 前返回 timeout，
+  不会退化成无超时；
 - session gate 先 detach、拒绝新调用，并等待已进入调用结束后才执行 native close；
 - 现有公开 API 的源码兼容 smoke，包括可写 `keyEncoder`；严格并发编译同时验证
   `setEventHandler` 保持原非 `@Sendable` 公开形态。

@@ -4,7 +4,14 @@
 
 本仓库以中文变更日志为主，并同步维护英文镜像。
 
-## v0.4.0-abi.5（计划中的 Stage1 维护预发布）
+## 未发布
+
+- Swift wrapper 现在从 `runOneshot`/`spawn` API 入口建立绝对 deadline，并在
+  argv/env/cwd/chroot 封送完成后重新计算传给 native 的剩余毫秒，避免参数封送重启
+  完整 timeout、使 SPAWN 在产品期限后才被接纳。剩余不足 1 ms 时直接返回
+  `ISH_ERR_TIMEOUT`，不会把 `0` 误解释为无超时。
+
+## v0.4.0-abi.5（已发布的 Stage1 维护预发布）
 
 这是 `v0.4.0-abi.4` 之后的兼容性维护版本，仍是 prerelease，**不是稳定
 v0.4.0**。
