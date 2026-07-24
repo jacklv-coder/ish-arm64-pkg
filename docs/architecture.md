@@ -209,8 +209,10 @@ guest PID 1 以 EOF 清理全部 child。spawn 的 measure/build/send/free 由�
 关键字节 reserve 在编译期被要求至少容纳最小 lifecycle frame；有限 oneshot 和
 streaming spawn 的 deadline 都从 API 入口开始，同时覆盖 instance gate、spawn gate 和
 SPAWN 队列接纳。有限 streaming session 的 SPAWN、stdin close 与 terminate 采用保持
-顺序的异步接纳，避免 control writer 停滞吞掉产品期限。stdin close 遇到 active stdin
-write 时返回 `ISH_ERR_BUSY` 而不是等待；终止完成仍以 `EXITED` 为准。
+顺序的异步接纳，避免 control writer 停滞吞掉产品期限；session 会保留 SPAWN 的原生
+绝对 deadline，stdin close 复用同一期限取得 writer gate，过期时返回
+`ISH_ERR_TIMEOUT` 而不会重新开始等待。stdin close 遇到 active stdin write 时返回
+`ISH_ERR_BUSY` 而不是等待；终止完成仍以 `EXITED` 为准。
 
 Stage1 Swift 尚未交付新的 typed status 和 Terminal callback 有界投递；不能把 native
 积压上限误写成 Stage2 Swift callback 策略已完成。

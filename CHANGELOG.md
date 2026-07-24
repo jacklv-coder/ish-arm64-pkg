@@ -10,6 +10,9 @@
   argv/env/cwd/chroot 封送完成后重新计算传给 native 的剩余毫秒，避免参数封送重启
   完整 timeout、使 SPAWN 在产品期限后才被接纳。剩余不足 1 ms 时直接返回
   `ISH_ERR_TIMEOUT`，不会把 `0` 误解释为无超时。
+- 有限 streaming session 现在保留 SPAWN 的原生绝对 deadline；stdin close 在控制队列
+  入队时复用同一期限，无法在期限前取得 writer gate 时返回 `ISH_ERR_TIMEOUT`，不会在
+  SPAWN 已成功后重新开始一段 admission 等待。
 
 ## v0.4.0-abi.5（已发布的 Stage1 维护预发布）
 

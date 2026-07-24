@@ -743,6 +743,8 @@ public final class IshSession: @unchecked Sendable {
         }
     }
 
+    /// Finite-timeout sessions reuse their native SPAWN admission deadline.
+    /// Expiry returns `ISH_ERR_TIMEOUT` without publishing a late EOF frame.
     public func closeStdin() throws {
         try withRawCall { r in
             let rc = ish_embed_session_close_stdin(r)

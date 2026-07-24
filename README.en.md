@@ -137,7 +137,9 @@ print(String(decoding: result.stdoutData, as: UTF8.self))
 A finite timeout starts at Swift API entry, deducts argv/env/cwd/chroot
 marshalling, and then covers the native SPAWN staging gate and control-queue
 admission. Finite streaming sessions use ordered bounded asynchronous
-admission for SPAWN, stdin close, and terminate; callers must still read
+admission for SPAWN, stdin close, and terminate. The session retains native
+SPAWN's absolute deadline, and stdin close reuses it when acquiring the writer
+gate, returning `ISH_ERR_TIMEOUT` on expiry. Callers must still read
 authoritative `EXITED` before confirming termination. Stdin close returns
 `ISH_ERR_BUSY` rather than waiting behind an active stdin write. If the runtime
 cannot confirm cleanup, it enters shutting-down state instead of leaving an

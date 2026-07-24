@@ -109,10 +109,11 @@ Important coverage includes:
 - busy shutdown with live sessions/active calls and normal soft-halt/join;
 - ordinary/critical control-queue frame/byte ceilings, bounded EOF fallback for
   close and finite oneshot under saturation, finite streaming instance/staging/
-  queue-gate deadlines, bounded stdin-close/terminate under a stalled writer,
-  busy stdin-close behind an active write, exact stop/finish release, and the
-  spawn staging gate with a blocked reader; smaller test budgets make overflow
-  and reuse deterministic;
+  queue-gate deadlines, deterministic reuse of the original SPAWN deadline by
+  stdin close behind a stalled writer, bounded stdin-close/terminate, busy
+  stdin-close behind an active write, exact stop/finish release, and the spawn
+  staging gate with a blocked reader; smaller test budgets make overflow and
+  reuse deterministic;
 - stdin partial writes, `EAGAIN`, queue ceilings, and error propagation;
 - no dirty marking on TLB READ and retention of every page across C fast,
   write-miss, and cross-page stores, including a final page deferred until

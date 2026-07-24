@@ -112,10 +112,11 @@ struct ish_embed_session {
     ish_embed_instance_t *inst;
     uint32_t              id;
     /* A finite streaming spawn uses ordered asynchronous control admission.
-     * This keeps its SPAWN/EOF/terminate path bounded even when the writer is
-     * stalled, while zero-timeout legacy sessions retain synchronous delivery
-     * semantics. */
-    int                   bounded_streaming_controls;
+     * Preserve its absolute admission deadline so stdin EOF cannot start a
+     * fresh wait after the original product budget expires. Terminate remains
+     * a separately bounded lifecycle operation. Zero-timeout legacy sessions
+     * retain synchronous delivery semantics. */
+    uint64_t              streaming_deadline_ms;
     int                   stdin_closed;
     int                   closing;
     int                   guest_exited;
@@ -590,14 +591,6 @@ static int send_frame(ish_embed_instance_t *inst,
                       uint8_t type, uint8_t flags, uint32_t sid,
                       const void *payload, uint32_t payload_len) {
     return enqueue_frame(inst, type, flags, sid, payload, payload_len, 1,
-                         OUTBOUND_ADMISSION_NORMAL, 0);
-}
-
-static int send_frame_async_normal(ish_embed_instance_t *inst,
-                                   uint8_t type, uint8_t flags, uint32_t sid,
-                                   const void *payload,
-                                   uint32_t payload_len) {
-    return enqueue_frame(inst, type, flags, sid, payload, payload_len, 0,
                          OUTBOUND_ADMISSION_NORMAL, 0);
 }
 
@@ -1613,7 +1606,7 @@ static int spawn_live_instance_serialized(ish_embed_instance_t *inst,
     if (!s) return ISH_ERR_OOM;
     s->inst = inst;
     s->id   = sid;
-    s->bounded_streaming_controls = deadline_ms != 0;
+    s->streaming_deadline_ms = deadline_ms;
     s->references = 1;
     pthread_mutex_init(&s->stdin_lock, NULL);
     pthread_mutex_init(&s->lock, NULL);
@@ -1857,7 +1850,7 @@ static int send_session_control(ish_embed_session_t *s, uint8_t type,
     s->active_controls++;
     ish_embed_instance_t *inst = s->inst;
     uint32_t sid = s->id;
-    int bounded_streaming_controls = s->bounded_streaming_controls;
+    int bounded_streaming_controls = s->streaming_deadline_ms != 0;
     pthread_mutex_unlock(&s->lock);
 #ifdef ISH_EMBED_TESTING
     extern void ish_embed_test_after_session_control_admission(uint8_t type);
@@ -1901,7 +1894,8 @@ int ish_embed_session_terminate(ish_embed_session_t *s, uint32_t grace_ms) {
 
 int ish_embed_session_close_stdin(ish_embed_session_t *s) {
     if (!s) return ISH_ERR_INVALID_ARG;
-    int bounded_streaming_controls = s->bounded_streaming_controls;
+    uint64_t streaming_deadline_ms = s->streaming_deadline_ms;
+    int bounded_streaming_controls = streaming_deadline_ms != 0;
     if (bounded_streaming_controls) {
         int lock_rc = pthread_mutex_trylock(&s->stdin_lock);
         if (lock_rc == EBUSY) return ISH_ERR_BUSY;
@@ -1925,8 +1919,9 @@ int ish_embed_session_close_stdin(ish_embed_session_t *s) {
         return ISH_OK;
     }
     int rc = bounded_streaming_controls
-        ? send_frame_async_normal(
-            inst, ISH_FT_STDIN_CLOSE, 0, sid, NULL, 0)
+        ? send_frame_async_normal_until(
+            inst, ISH_FT_STDIN_CLOSE, 0, sid, NULL, 0,
+            streaming_deadline_ms)
         : send_frame(inst, ISH_FT_STDIN_CLOSE, 0, sid, NULL, 0);
     if (rc != ISH_OK) {
         pthread_mutex_lock(&s->lock);
