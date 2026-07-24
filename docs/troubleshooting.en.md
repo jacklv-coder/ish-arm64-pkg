@@ -29,8 +29,8 @@ checksum, and RootFS provenance, size, and SHA-256. Without this matrix, logs
 may describe different states.
 
 The current correct combination is C ABI 1, wire v4, Swift not calling
-retain/release, and a manifest pointing at the public `v0.4.0-abi.2`. After
-`v0.4.0-abi.3` publication, only the manifest URL/checksum should switch to the
+retain/release, and a manifest pointing at the public `v0.4.0-abi.3`. After
+`v0.4.0-abi.4` publication, only the manifest URL/checksum should switch to the
 maintenance asset.
 
 ## Missing retain/release or other link symbols
@@ -47,24 +47,24 @@ nm -gU path/to/libIshKernel.a | awk '{print $NF}' | sort -u \
   old-ABI-compatible Swift layer rather than expanding this maintenance release.
 - If a local Stage1 XCFramework lacks them, it was built from an old commit,
   gitlink, or cache. Rebuild in an isolated path.
-- If `v0.4.0-abi.3` is public but the manifest is still `v0.4.0-abi.2`, inspect
+- If `v0.4.0-abi.4` is public but the manifest is still `v0.4.0-abi.3`, inspect
   whether the release commit/default-branch fast-forward completed. Never guess
   a checksum.
 
 ## `Package.swift` looks “not updated”
 
-Between the maintenance PR merge and Release publication, a `v0.4.0-abi.2`
+Between the maintenance PR merge and Release publication, a `v0.4.0-abi.3`
 manifest pin is expected. The release script rebuilds and validates assets from
 the merged commit, creates a manifest-only release commit, publishes and
 verifies assets, then fast-forwards the default branch. Thus the branch never
 advertises a 404 URL.
 
-Only after confirming that the `v0.4.0-abi.3` Release is public is an old
+Only after confirming that the `v0.4.0-abi.4` Release is public is an old
 manifest abnormal:
 
 ```sh
-gh release view v0.4.0-abi.3 --repo jacklv-coder/ish-arm64-pkg
-git ls-remote --tags origin refs/tags/v0.4.0-abi.3
+gh release view v0.4.0-abi.4 --repo jacklv-coder/ish-arm64-pkg
+git ls-remote --tags origin refs/tags/v0.4.0-abi.4
 git fetch origin
 git log --oneline --decorate -5 origin/main
 ```
@@ -94,11 +94,27 @@ information, with `__chk_fail_overflow`, `__strcpy_chk`, `do_uname`, and
 
 - `v0.4.0-abi.2` does not contain this fix; do not hide the defect by shortening
   a CI runner name.
-- The planned `v0.4.0-abi.3` bounds every fixed-width guest `uname` field and
+- `v0.4.0-abi.3` bounds every fixed-width guest `uname` field and
   guarantees NUL termination.
 - Source validation can run iSH's `uname` unit test and
   `scripts/run-host-tests.sh --smoke`. After publication, the Xcode 16 / iOS 18
   gate should also prove a real guest `uname -a` succeeds.
+
+## A blocked guest command survives cancellation
+
+Symptom: after signalling a guest command blocked in `poll`, `nanosleep`, or
+another host syscall, the command does not exit; the cancellation deadline
+cannot confirm cleanup, or a later command cannot recover.
+
+- `v0.4.0-abi.3` can still inherit a host-app thread's blocked SIGUSR1, leaving
+  iSH's internal interrupt pending. Do not hide the defect with shorter polling
+  or app-level forced shutdown.
+- The planned `v0.4.0-abi.4` explicitly unblocks internal SIGUSR1 on the
+  embedded bootstrap and every guest task thread, allowing guest signals to
+  interrupt blocking host syscalls.
+- Source validation should run iSH's `internal-signal-mask` test, package-level
+  host/iOS tests, and a real-RootFS “cancel → native termination confirmed →
+  later command → shutdown” flow.
 
 For a local `scripts/run-host-tests.sh` failure, first run
 `scripts/build-rootfs.sh --print-identity`, then

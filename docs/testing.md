@@ -12,27 +12,27 @@ iOS 18 二进制、内部 wire v4 和发布供应链处于同一可解释状态�
 | 协议/摘要单元 | `proto_test`、`supervisor_stdin_test`、`sha256_test` | v4 帧解析、边界、stdin partial write/反压、SHA-256 标准向量与畸形元数据拒绝 | 真正 iSH boot |
 | 生命周期 | `lifecycle_test` | retain/release、close/read/write/signal 交错、shutdown/busy、PID identity、错误内嵌摘要/路径在安装前失败 | Stage2 Swift borrow 已完成 |
 | JIT 脏页 | `dirty_page_test`、`dirty-page-trace` | READ 不置位、fast/miss/cross-page 写合并、单页碰撞精确过滤、显式跨页 `end_addr` 失效、多页保守桶、host/kernel 后置失效、精确 tracer、跨 TLB `IC IVAU` 与 ARM64/x86 直链边界 | 非规范的无 cache-maintenance 自修改代码立即可见；x86 跨线程全局发布；原写路径吞吐 |
-| native 集成 | `procfs_test`、`ishembed_smoke` | fakefs、spawn、procfs、真实 guest `uname -a`、通用命令链路 | RootFS 来源/许可可信；特定用户工具兼容性 |
+| native 集成 | `internal-signal-mask`、`procfs_test`、`ishembed_smoke` | 嵌入/guest task 内部 SIGUSR1 mask、fakefs、spawn、procfs、真实 guest `uname -a`、通用命令链路 | RootFS 来源/许可可信；特定用户工具兼容性 |
 | sanitizer | ASan/UBSan，必要时 TSan | 已覆盖路径上的越界、UAF、未定义行为和数据竞争 | 所有调度组合都无缺陷 |
 | Swift RootFS-free | instance/session gate、shutdown retry、公开 API smoke | oneshot/session lease 阻止旧 ABI UAF、失败保留 handle、旧公开签名可编译 | 任意 C 调用都可取消或 close 始终有界 |
-| Swift manifest 真链接 | `test-swift-ios.sh --manifest-binary` | Stage1 Swift 与当前 `v0.4.0-abi.2` binary 链接 | `v0.4.0-abi.3` 修复已公开 |
+| Swift manifest 真链接 | `test-swift-ios.sh --manifest-binary` | Stage1 Swift 与当前 `v0.4.0-abi.3` binary 链接 | `v0.4.0-abi.4` 修复已公开 |
 | Swift local 真链接 | `test-swift-ios.sh --local-binary` | 同一 Swift 与待发布维护 XCFramework 链接 | GitHub 资产已发布 |
 | XCFramework | `build-ios.sh` + symbol/final-link 检查 | device/simulator arm64、最低 iOS 18、必需符号 | App 产品逻辑 |
 | 文档/脚本 | docs 正负门禁、shell syntax、策略测试 | 双语链接、失败诊断、release notes/version/tag/source policy | 文档本身等于实现 |
 
 ## 先确认 Stage1 状态
 
-`v0.4.0-abi.3` 发布前应同时满足：
+`v0.4.0-abi.4` 发布前应同时满足：
 
 - `ISH_EMBED_ABI_VERSION` 为 1；
 - `ISH_PROTO_VERSION` 为 4；
 - Swift 源不调用 `ish_embed_session_retain/release`；
-- `Package.swift` 仍固定已公开的 `v0.4.0-abi.2`；
+- `Package.swift` 仍固定已公开的 `v0.4.0-abi.3`；
 - 本地构建的新 XCFramework 导出 retain/release、join/soft-halt 等必需符号；
 - RootFS 没有出现在 Git diff、XCFramework、source archive 或 Release 清单中。
 
-发布后才把“manifest 固定到 `v0.4.0-abi.3`”加入预期。不能用发布后的预期否定
-发布前仍引用已验证 `v0.4.0-abi.2` 的正确状态。
+发布后才把“manifest 固定到 `v0.4.0-abi.4`”加入预期。不能用发布后的预期否定
+发布前仍引用已验证 `v0.4.0-abi.3` 的正确状态。
 
 ## 快速元数据与脚本门禁
 

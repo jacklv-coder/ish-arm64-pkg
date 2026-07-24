@@ -4,7 +4,22 @@
 
 本仓库以中文变更日志为主，并同步维护英文镜像。
 
-## v0.4.0-abi.3（计划中的 Stage1 维护预发布）
+## v0.4.0-abi.4（计划中的 Stage1 维护预发布）
+
+这是 `v0.4.0-abi.3` 之后的兼容性维护版本，仍是 prerelease，**不是稳定
+v0.4.0**。
+
+- `third_party/ish` 更新到 `c36dfd2`。嵌入启动线程和每个 guest task 线程会明确解除
+  iSH 内部 SIGUSR1 屏蔽，避免宿主 App 线程继承的 signal mask 使内部中断永久 pending。
+- guest signal 现在可可靠打断 `poll`、`nanosleep` 等阻塞中的宿主 syscall，使命令取消、
+  超时终止及后续 runtime 恢复不再依赖 supervisor 轮询或 App 级 workaround。
+- Linux x86、macOS arm64、iOS device/simulator 及真实 RootFS 路径覆盖 signal mask、
+  取消、取消后恢复和 shutdown 回归。
+- 公开 C ABI 仍为 1，wire protocol 仍为 v4，Swift API 不变；RootFS 不进入 Release。
+- 本版本不实现原生 Agent Loop，也不会在 iOS App 内安装或运行 Codex CLI。
+  Node.js/npm 仍可作为独立的可选 guest 包使用。
+
+## v0.4.0-abi.3（已发布的 Stage1 维护预发布）
 
 这是 `v0.4.0-abi.2` 之后的兼容性维护版本，仍是 prerelease，**不是稳定
 v0.4.0**。

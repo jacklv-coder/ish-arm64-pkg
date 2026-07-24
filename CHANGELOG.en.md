@@ -4,7 +4,28 @@
 
 Chinese is the primary changelog and this file is its maintained English mirror.
 
-## v0.4.0-abi.3 (planned Stage1 maintenance prerelease)
+## v0.4.0-abi.4 (planned Stage1 maintenance prerelease)
+
+This is a compatibility maintenance release after `v0.4.0-abi.3`. It remains a
+prerelease and is **not stable v0.4.0**.
+
+- `third_party/ish` advances to `c36dfd2`. The embedded bootstrap thread and
+  every guest task thread explicitly unblock iSH's internal SIGUSR1, preventing
+  a host-app thread's inherited signal mask from leaving internal interrupts
+  pending forever.
+- Guest signals can now reliably interrupt blocking host syscalls such as
+  `poll` and `nanosleep`, so command cancellation, timeout termination, and
+  subsequent runtime recovery do not depend on supervisor polling or an
+  app-level workaround.
+- Linux x86, macOS arm64, iOS device/simulator, and real-RootFS paths cover the
+  signal mask, cancellation, post-cancellation recovery, and shutdown.
+- The public C ABI remains 1, wire protocol remains v4, and the Swift API is
+  unchanged. RootFS remains outside the Release.
+- This version does not implement a native Agent Loop and does not install or
+  run Codex CLI inside the iOS app. Node.js/npm remain independent optional
+  guest packages.
+
+## v0.4.0-abi.3 (published Stage1 maintenance prerelease)
 
 This is a compatibility maintenance release after `v0.4.0-abi.2`. It remains a
 prerelease and is **not stable v0.4.0**.
