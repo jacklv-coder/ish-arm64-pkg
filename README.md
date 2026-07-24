@@ -109,12 +109,13 @@ print(String(decoding: result.stdoutData, as: UTF8.self))
 ```
 
 `IshSpawnOptions.timeout` 同时适用于 `runOneshot` 与 streaming `spawn`。有限超时从
-API 入口开始，包含 SPAWN staging gate 和控制队列接纳；有限 streaming session 的
-SPAWN、stdin close 与 terminate 采用保持顺序的有界异步接纳，调用方仍须读取权威
-`EXITED` 才能确认终止。stdin close 遇到 active stdin write 时返回 `ISH_ERR_BUSY`，
-不会排在它后面等待。如果 runtime 无法确认命令已清理，会转入 shutting-down 状态而
-不是遗留无主 guest 进程。NaN/正负无穷会在进入 native 前返回
-`ISH_ERR_INVALID_ARG (-13)`；正但小于 1 ms 的值向上取整为 1 ms，不会退化成“无超时”。
+Swift API 入口开始，先扣除 argv/env/cwd/chroot 的封送时间，再覆盖 native SPAWN
+staging gate 和控制队列接纳；有限 streaming session 的 SPAWN、stdin close 与
+terminate 采用保持顺序的有界异步接纳，调用方仍须读取权威 `EXITED` 才能确认终止。
+stdin close 遇到 active stdin write 时返回 `ISH_ERR_BUSY`，不会排在它后面等待。如果
+runtime 无法确认命令已清理，会转入 shutting-down 状态而不是遗留无主 guest 进程。
+NaN/正负无穷会在进入 native 前返回 `ISH_ERR_INVALID_ARG (-13)`；封送后剩余不足
+1 ms 时会返回 `ISH_ERR_TIMEOUT (-12)`，不会把 `0` 传给 native 而退化成“无超时”。
 
 只有当已校验的 RootFS manifest 明确包含 `/srv/vms/.template` 时，才可使用
 `ensureDefaultVM()` 和 `spawn(in:)` 这组 VM helper。流式 session 必须持续消费输出，

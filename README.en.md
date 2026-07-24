@@ -134,15 +134,17 @@ print(String(decoding: result.stdoutData, as: UTF8.self))
 ```
 
 `IshSpawnOptions.timeout` applies to both `runOneshot` and streaming `spawn`.
-A finite timeout starts at API entry and includes the SPAWN staging gate and
-control-queue admission. Finite streaming sessions use ordered bounded
-asynchronous admission for SPAWN, stdin close, and terminate; callers must
-still read authoritative `EXITED` before confirming termination. Stdin close
-returns `ISH_ERR_BUSY` rather than waiting behind an active stdin write. If the
-runtime cannot confirm cleanup, it enters shutting-down state instead of
-leaving an unowned guest process. NaN and either infinity return
-`ISH_ERR_INVALID_ARG (-13)` before native entry. A positive sub-millisecond
-value rounds up to 1 ms instead of degrading to “no timeout.”
+A finite timeout starts at Swift API entry, deducts argv/env/cwd/chroot
+marshalling, and then covers the native SPAWN staging gate and control-queue
+admission. Finite streaming sessions use ordered bounded asynchronous
+admission for SPAWN, stdin close, and terminate; callers must still read
+authoritative `EXITED` before confirming termination. Stdin close returns
+`ISH_ERR_BUSY` rather than waiting behind an active stdin write. If the runtime
+cannot confirm cleanup, it enters shutting-down state instead of leaving an
+unowned guest process. NaN and either infinity return `ISH_ERR_INVALID_ARG
+(-13)` before native entry. If less than 1 ms remains after marshalling, the
+wrapper returns `ISH_ERR_TIMEOUT (-12)` instead of passing native `0` and
+degrading to “no timeout.”
 
 Use the `ensureDefaultVM()` and `spawn(in:)` helpers only when the verified
 RootFS manifest explicitly includes `/srv/vms/.template`. Continuously drain a

@@ -103,7 +103,11 @@ private final class LifecycleNativeHarness: @unchecked Sendable {
                 lock.unlock()
                 return result
             },
-            runOneshot: { [self] _, opts, result in
+            runOneshot: { [self] _, opts, timeoutBudget, result in
+                try timeoutBudget.apply(
+                    to: opts,
+                    at: ProcessInfo.processInfo.systemUptime
+                )
                 let initial = result.pointee
                 let wasZeroed = initial.exit_code == 0
                     && initial.signal == 0
@@ -119,7 +123,11 @@ private final class LifecycleNativeHarness: @unchecked Sendable {
                 timeoutObservedBody(opts.pointee.timeout_ms)
                 return oneshotBody(result)
             },
-            spawn: { [self] _, opts in
+            spawn: { [self] _, opts, timeoutBudget in
+                try timeoutBudget.apply(
+                    to: opts,
+                    at: ProcessInfo.processInfo.systemUptime
+                )
                 lock.lock()
                 spawnCalls += 1
                 lock.unlock()
@@ -415,11 +423,11 @@ final class IshEmbedTests: XCTestCase {
                        "invalid timeout must not enter native oneshot")
 
         XCTAssertThrowsError(try instance.runOneshot(
-            .init(argv: ["/bin/true"], timeout: 0.000_1))) {
+            .init(argv: ["/bin/true"], timeout: 1))) {
             XCTAssertEqual(ishErrorCode($0), -12)
         }
-        XCTAssertEqual(observedTimeout.snapshot(), [1],
-                       "positive sub-millisecond timeout must not become no-timeout")
+        XCTAssertTrue((1...1_000).contains(observedTimeout.snapshot()[0]),
+                      "finite oneshot timeout must reach native entry")
 
         for invalid in [TimeInterval.nan,
                         TimeInterval.infinity,
@@ -433,8 +441,8 @@ final class IshEmbedTests: XCTestCase {
                        "invalid timeout must not enter native spawn")
 
         let session = try instance.spawn(
-            .init(argv: ["/bin/true"], timeout: 0.000_1))
-        XCTAssertEqual(observedSpawnTimeout.snapshot(), [1],
+            .init(argv: ["/bin/true"], timeout: 1))
+        XCTAssertTrue((1...1_000).contains(observedSpawnTimeout.snapshot()[0]),
                        "finite streaming timeout must reach native spawn")
         for invalid in [TimeInterval.nan,
                         TimeInterval.infinity,
@@ -450,6 +458,41 @@ final class IshEmbedTests: XCTestCase {
         XCTAssertEqual(counts.spawn, 1)
         XCTAssertEqual(counts.close, 1)
         XCTAssertEqual(counts.shutdown, 1)
+    }
+
+    func testTimeoutBudgetDeductsSwiftStagingBeforeNativeEntry() throws {
+        let budget = try IshSpawnTimeoutBudget(
+            timeout: 0.100,
+            startedAt: 500
+        )
+        let remaining = try budget.remainingMilliseconds(at: 500.025)
+        XCTAssertTrue((74...75).contains(remaining))
+
+        XCTAssertThrowsError(
+            try budget.remainingMilliseconds(at: 500.100)
+        ) {
+            XCTAssertEqual(ishErrorCode($0), -12)
+        }
+
+        let submillisecond = try IshSpawnTimeoutBudget(
+            timeout: 0.000_9,
+            startedAt: 700
+        )
+        XCTAssertThrowsError(
+            try submillisecond.remainingMilliseconds(at: 700)
+        ) {
+            XCTAssertEqual(ishErrorCode($0), -12)
+        }
+
+        let legacy = try IshSpawnTimeoutBudget(
+            timeout: 0,
+            startedAt: 900
+        )
+        XCTAssertEqual(
+            try legacy.remainingMilliseconds(at: 1_000),
+            0,
+            "non-positive timeout must retain legacy unbounded semantics"
+        )
     }
 
     func testShutdownGateRejectsNewCallsAndConcurrentShutdown() throws {

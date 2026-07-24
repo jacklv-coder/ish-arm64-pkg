@@ -44,11 +44,13 @@ public struct IshSpawnOptions {
     public var env: [String: String]?
     public var allocateTTY: Bool
     public var mergeStderrIntoStdout: Bool
-    /// For oneshot commands, bounds the complete native execution and cleanup
-    /// path. For streaming spawn, bounds SPAWN staging/admission and selects
-    /// ordered bounded admission for stdin close and terminate. Callers still
-    /// confirm streaming termination by reading the authoritative exit event;
-    /// stdin close may report busy while an active write owns its order gate.
+    /// Starts at the Swift API entry. For oneshot commands, bounds Swift option
+    /// staging plus the complete native execution and cleanup path. For
+    /// streaming spawn, bounds Swift/native SPAWN staging and admission, and
+    /// selects ordered bounded admission for stdin close and terminate. Callers
+    /// still confirm streaming termination by reading the authoritative exit
+    /// event; stdin close may report busy while an active write owns its order
+    /// gate.
     public var timeout: TimeInterval?
     /// If non-nil, the child chroots to this guest path before exec.
     /// Used for VM-style isolation; pass `/srv/vms/<name>` to confine
@@ -120,6 +122,57 @@ private let streamStdout: Int32 = 1
 private let streamStderr: Int32 = 2
 private let streamExited: Int32 = 3
 
+/// Converts the public relative timeout into one absolute Swift-side deadline.
+/// The remaining native budget is resolved only after argv/env/cwd/chroot
+/// staging, immediately before the C entry. A positive remainder below one
+/// millisecond expires in Swift because `timeout_ms == 0` means unbounded.
+struct IshSpawnTimeoutBudget {
+    private static let maximumMilliseconds = Double(UInt32.max - 1)
+    private let deadline: TimeInterval?
+
+    init(timeout: TimeInterval?, startedAt: TimeInterval) throws {
+        guard let timeout else {
+            deadline = nil
+            return
+        }
+        guard timeout.isFinite else {
+            throw IshError.from(ishErrInvalidArg)
+        }
+        guard timeout > 0 else {
+            deadline = nil
+            return
+        }
+
+        let boundedSeconds = min(
+            timeout,
+            Self.maximumMilliseconds / 1_000
+        )
+        deadline = startedAt + boundedSeconds
+    }
+
+    func remainingMilliseconds(at now: TimeInterval) throws -> UInt32 {
+        guard let deadline else {
+            return 0
+        }
+
+        let milliseconds = min(
+            Self.maximumMilliseconds,
+            floor((deadline - now) * 1_000)
+        )
+        guard milliseconds >= 1 else {
+            throw IshError.from(ishErrTimeout)
+        }
+        return UInt32(milliseconds)
+    }
+
+    func apply(
+        to options: UnsafeMutablePointer<ish_embed_spawn_opts_t>,
+        at now: TimeInterval
+    ) throws {
+        options.pointee.timeout_ms = try remainingMilliseconds(at: now)
+    }
+}
+
 /// Internal lifecycle seam used by deterministic RootFS-free tests. The live
 /// value remains a direct adapter over the same v0.3.3 C ABI; this does not add
 /// or dynamically probe any newer retain/release symbols.
@@ -128,9 +181,12 @@ struct IshLifecycleNativeCalls: @unchecked Sendable {
         (result: Int32, instance: OpaquePointer?)
     let shutdown: (OpaquePointer, UInt32) -> Int32
     let runOneshot: (OpaquePointer,
-                     UnsafePointer<ish_embed_spawn_opts_t>,
-                     UnsafeMutablePointer<ish_embed_oneshot_result_t>) -> Int32
-    let spawn: (OpaquePointer, UnsafePointer<ish_embed_spawn_opts_t>) ->
+                     UnsafeMutablePointer<ish_embed_spawn_opts_t>,
+                     IshSpawnTimeoutBudget,
+                     UnsafeMutablePointer<ish_embed_oneshot_result_t>) throws -> Int32
+    let spawn: (OpaquePointer,
+                UnsafeMutablePointer<ish_embed_spawn_opts_t>,
+                IshSpawnTimeoutBudget) throws ->
         (result: Int32, session: OpaquePointer?)
     let sessionClose: (OpaquePointer) -> Void
     let freeBuffer: (UnsafeMutablePointer<UInt8>) -> Void
@@ -144,10 +200,18 @@ struct IshLifecycleNativeCalls: @unchecked Sendable {
         shutdown: { instance, graceMs in
             ish_embed_shutdown(instance, graceMs)
         },
-        runOneshot: { instance, opts, result in
-            ish_embed_run_oneshot(instance, opts, result)
+        runOneshot: { instance, opts, timeoutBudget, result in
+            try timeoutBudget.apply(
+                to: opts,
+                at: ProcessInfo.processInfo.systemUptime
+            )
+            return ish_embed_run_oneshot(instance, opts, result)
         },
-        spawn: { instance, opts in
+        spawn: { instance, opts, timeoutBudget in
+            try timeoutBudget.apply(
+                to: opts,
+                at: ProcessInfo.processInfo.systemUptime
+            )
             var session: OpaquePointer? = nil
             let result = ish_embed_spawn(instance, opts, &session)
             return (result, session)
@@ -241,11 +305,20 @@ public final class IshInstance: @unchecked Sendable {
 
     /// Run a single command and collect output.
     public func runOneshot(_ opts: IshSpawnOptions) throws -> IshOneshotResult {
+        let timeoutBudget = try IshSpawnTimeoutBudget(
+            timeout: opts.timeout,
+            startedAt: ProcessInfo.processInfo.systemUptime
+        )
         let lease = try callGate.acquireCall()
         defer { lease.release() }
         return try withCSpawnOpts(opts) { cOpts in
             var res = ish_embed_oneshot_result_t()
-            let rc = nativeCalls.runOneshot(lease.raw, cOpts, &res)
+            let rc = try nativeCalls.runOneshot(
+                lease.raw,
+                cOpts,
+                timeoutBudget,
+                &res
+            )
             if rc != ishOK { throw IshError.from(rc) }
             let out = bytesToData(res.stdout_buf,
                                   length: res.stdout_len,
@@ -265,11 +338,19 @@ public final class IshInstance: @unchecked Sendable {
 
     /// Spawn a streaming session.
     public func spawn(_ opts: IshSpawnOptions) throws -> IshSession {
+        let timeoutBudget = try IshSpawnTimeoutBudget(
+            timeout: opts.timeout,
+            startedAt: ProcessInfo.processInfo.systemUptime
+        )
         let lease = try callGate.acquireCall()
         let tty = opts.allocateTTY
         do {
             return try withCSpawnOpts(opts) { cOpts in
-                let (rc, sess) = nativeCalls.spawn(lease.raw, cOpts)
+                let (rc, sess) = try nativeCalls.spawn(
+                    lease.raw,
+                    cOpts,
+                    timeoutBudget
+                )
                 if rc != ishOK { throw IshError.from(rc) }
                 guard let sess = sess else { throw IshError.from(ishErrInternal) }
 
@@ -289,26 +370,10 @@ public final class IshInstance: @unchecked Sendable {
 
     // MARK: - private helpers
 
-    private func withCSpawnOpts<R>(_ opts: IshSpawnOptions,
-                                   _ body: (UnsafePointer<ish_embed_spawn_opts_t>) throws -> R) throws -> R {
-        let timeoutMilliseconds: UInt32
-        if let timeout = opts.timeout {
-            guard timeout.isFinite else {
-                throw IshError.from(ishErrInvalidArg)
-            }
-            if timeout <= 0 {
-                timeoutMilliseconds = 0
-            } else {
-                let maximum = Double(UInt32.max - 1)
-                let milliseconds = timeout >= maximum / 1_000
-                    ? maximum
-                    : max(1, ceil(timeout * 1_000))
-                timeoutMilliseconds = UInt32(milliseconds)
-            }
-        } else {
-            timeoutMilliseconds = 0
-        }
-
+    private func withCSpawnOpts<R>(
+        _ opts: IshSpawnOptions,
+        _ body: (UnsafeMutablePointer<ish_embed_spawn_opts_t>) throws -> R
+    ) throws -> R {
         // argv: [String] -> NULL-terminated [const char *]
         var argvStorage: [UnsafeMutablePointer<CChar>?] = opts.argv.map { strdup($0) }
         argvStorage.append(nil)
@@ -339,7 +404,9 @@ public final class IshInstance: @unchecked Sendable {
                 cOpts.cwd  = cwdC.map { UnsafePointer($0) }
                 cOpts.allocate_tty = opts.allocateTTY ? 1 : 0
                 cOpts.merge_stderr_into_stdout = opts.mergeStderrIntoStdout ? 1 : 0
-                cOpts.timeout_ms = timeoutMilliseconds
+                // The live native adapter resolves this immediately before C
+                // entry. Zero is only a placeholder while Swift stages opts.
+                cOpts.timeout_ms = 0
                 cOpts.chroot_path = chrootC.map { UnsafePointer($0) }
                 cOpts.reserved_flags = 0
                 if let ws = opts.initialWindowSize {

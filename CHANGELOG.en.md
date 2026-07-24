@@ -4,7 +4,16 @@
 
 Chinese is the primary changelog and this file is its maintained English mirror.
 
-## v0.4.0-abi.5 (planned Stage1 maintenance prerelease)
+## Unreleased
+
+- The Swift wrapper now establishes one absolute deadline at
+  `runOneshot`/`spawn` API entry and recomputes the remaining native
+  milliseconds after argv/env/cwd/chroot marshalling. Option staging can no
+  longer restart the full timeout and admit SPAWN after the product deadline.
+  A remainder below 1 ms returns `ISH_ERR_TIMEOUT` instead of passing native
+  `0`, which means unbounded.
+
+## v0.4.0-abi.5 (published Stage1 maintenance prerelease)
 
 This is a compatibility maintenance release after `v0.4.0-abi.4`. It remains a
 prerelease and is **not stable v0.4.0**.

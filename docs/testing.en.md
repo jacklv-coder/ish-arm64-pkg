@@ -298,8 +298,9 @@ RootFS-independent tests in `Tests/IshEmbedTests` cover:
   failures quarantining ordinary calls while retaining shutdown cleanup retry,
   and success consuming the process's only lifecycle and rejecting a later boot
   before native entry;
-- oneshot/read rejecting NaN or infinite timeouts before native entry, and a
-  positive sub-millisecond oneshot timeout converting to at least 1 ms;
+- oneshot/read rejecting NaN or infinite timeouts before native entry; spawn
+  budgets deduct Swift option marshalling and expire before native entry when
+  less than 1 ms remains instead of degrading to no timeout;
 - the session gate detaching first, rejecting new calls, and waiting for an
   admitted call before native close;
 - public source-compatibility smoke such as writable `keyEncoder`; strict
