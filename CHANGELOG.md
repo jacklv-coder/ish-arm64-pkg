@@ -4,7 +4,10 @@
 
 本仓库以中文变更日志为主，并同步维护英文镜像。
 
-## 未发布
+## v0.4.0-abi.6（计划中的 Stage1 维护预发布）
+
+这是 `v0.4.0-abi.5` 之后的兼容性维护版本，仍是 prerelease，**不是稳定
+v0.4.0**。
 
 - Swift wrapper 现在从 `runOneshot`/`spawn` API 入口建立绝对 deadline，并在
   argv/env/cwd/chroot 封送完成后重新计算传给 native 的剩余毫秒，避免参数封送重启
@@ -13,6 +16,9 @@
 - 有限 streaming session 现在保留 SPAWN 的原生绝对 deadline；stdin close 在控制队列
   入队时复用同一期限，无法在期限前取得 writer gate 时返回 `ISH_ERR_TIMEOUT`，不会在
   SPAWN 已成功后重新开始一段 admission 等待。
+- 公开 C ABI 仍为 1，wire protocol 仍为 v4，未新增公开符号；RootFS 不进入 Release。
+  本版本不实现原生 Agent Loop，也不会在 iOS App 内安装或运行 Codex CLI。Node.js/npm
+  仍可作为独立的可选 guest 包使用。
 
 ## v0.4.0-abi.5（已发布的 Stage1 维护预发布）
 

@@ -5,7 +5,7 @@
 # existing tag and accidentally creating a stable tag before Stage2 is
 # integrated and separately authorized.
 ish_release_stage1_version_allowed() {
-    [[ "$1" == "v0.4.0-abi.5" ]]
+    [[ "$1" == "v0.4.0-abi.6" ]]
 }
 
 # Call only after the release entry point has validated strict SemVer.
@@ -27,19 +27,22 @@ ish_release_abi_transition_notes() {
 
 这不是稳定 v0.4。本预发布交付 native lifecycle 基础：session
 retain/release、可等待 kernel thread、soft-halt 与内部精确匹配 wire protocol v4。
-本维护版本还为有限 streaming session 提供从 API 入口覆盖 SPAWN gate 与控制队列
-接纳的 deadline，并让 stdin close/terminate 使用保持顺序的有界异步接纳；active
-stdin write 持有顺序锁时 stdin close 会立即返回 busy。
+本维护版本从 Swift API 入口建立绝对 deadline，扣除 argv/env/cwd/chroot 封送耗时后
+将剩余时间交给 native；有限 streaming session 会保留原始 SPAWN deadline，并让 stdin
+close 在控制队列接纳时复用它。过期会返回 timeout，不会重新开始一段等待；active stdin
+write 持有顺序锁时 stdin close 仍会立即返回 busy。
 公开 C ABI 版本仍为 1。Swift 源仍保持 v0.3.3 ABI 兼容且不调用 retain/release；
 完整 Swift lifecycle、类型化状态与 Terminal/VT 改造将在 Stage2 交付。
 本 Release 不包含 RootFS，发布脚本也不会上传 RootFS。
 
 This is not stable v0.4. It delivers the native lifecycle foundation: session
 retain/release, a joinable kernel thread, soft-halt, and internal exact-match
-wire protocol v4. This maintenance release also gives finite streaming sessions
-an API-entry deadline over SPAWN gate/control-queue admission and ordered
-bounded asynchronous stdin-close/terminate admission; stdin close reports busy
-while an active write owns its order gate. The public C ABI remains
+wire protocol v4. This maintenance release establishes an absolute deadline at
+Swift API entry, subtracts argv/env/cwd/chroot marshalling, and passes only the
+remainder to native. Finite streaming sessions retain the original SPAWN
+deadline and reuse it for stdin-close control-queue admission, returning timeout
+instead of starting another wait; stdin close still reports busy while an
+active write owns its order gate. The public C ABI remains
 version 1. Swift source remains v0.3.3-ABI compatible and does not call
 retain/release; the complete Swift
 lifecycle, typed statuses, and Terminal/VT changes remain Stage2. This Release
