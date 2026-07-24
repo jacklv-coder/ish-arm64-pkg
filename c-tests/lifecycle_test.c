@@ -58,6 +58,8 @@ enum fake_mode {
     FAKE_MALFORMED_EVENT,
     FAKE_OUTPUT_ALLOCATION_FAILURE,
     FAKE_SPAWN_ARGUMENT_BOUND,
+    FAKE_WRITER_LOCK_HOLD,
+    FAKE_WRITER_PRECOMMIT_DEADLINE,
 };
 
 enum malformed_event_kind {
@@ -129,6 +131,8 @@ static int g_spawn_count;
 static int g_control_reader_blocked;
 static int g_release_control_reader;
 static int g_abort_blocked_control;
+static int g_writer_lock_held;
+static int g_release_writer_lock;
 static int g_oneshot_close_stdin_attempts;
 static int g_oneshot_close_stdin_status;
 static int g_oneshot_terminate_attempts;
@@ -630,6 +634,22 @@ void ish_embed_test_after_session_control_admission(uint8_t type) {
     g_session_control_admitted = 1;
     pthread_cond_broadcast(&g_fake_cond);
     while (!g_release_session_control)
+        pthread_cond_wait(&g_fake_cond, &g_fake_lock);
+    pthread_mutex_unlock(&g_fake_lock);
+}
+
+void ish_embed_test_after_writer_lock(uint8_t type) {
+    if (g_mode == FAKE_WRITER_PRECOMMIT_DEADLINE &&
+        type == ISH_FT_SPAWN) {
+        usleep(150 * 1000);
+        return;
+    }
+    if (g_mode != FAKE_WRITER_LOCK_HOLD || type != ISH_FT_RESIZE)
+        return;
+    pthread_mutex_lock(&g_fake_lock);
+    g_writer_lock_held = 1;
+    pthread_cond_broadcast(&g_fake_cond);
+    while (!g_release_writer_lock)
         pthread_cond_wait(&g_fake_cond, &g_fake_lock);
     pthread_mutex_unlock(&g_fake_lock);
 }
@@ -2134,6 +2154,352 @@ static int test_control_oneshot_spawn_lock_deadline(void) {
     return ok ? 0 : 1;
 }
 
+static int test_control_streaming_spawn_lock_deadline(void) {
+    g_mode = FAKE_CONTROL_SPAWN_GATE;
+    ish_embed_instance_t *inst = boot_instance();
+    ish_embed_session_t *trigger = spawn_echo(inst);
+    if (!wait_fake_flag(&g_control_reader_blocked, 2000)) {
+        fprintf(stderr, "streaming spawn lock: fake reader did not block\n");
+        return 1;
+    }
+
+    size_t large_len = 70000u;
+    char *large_arg = (char *)malloc(large_len + 1);
+    if (!large_arg) return 1;
+    memset(large_arg, 'd', large_len);
+    large_arg[large_len] = '\0';
+    const char *holder_argv[] = {"/bin/echo", large_arg, NULL};
+    ish_embed_spawn_opts_t holder_opts = {0};
+    holder_opts.argv = holder_argv;
+    struct concurrent_spawn_call holder = {
+        .inst = inst,
+        .opts = &holder_opts,
+        .session = NULL,
+        .rc = 123,
+    };
+    atomic_init(&holder.done, 0);
+    pthread_t holder_thread;
+    if (pthread_create(&holder_thread, NULL,
+                       concurrent_spawn_thread, &holder) != 0)
+        return 1;
+    if (!wait_control_frame_usage(inst, 1, 2000) ||
+        atomic_load(&holder.done)) {
+        fprintf(stderr,
+                "streaming spawn lock: synchronous SPAWN did not hold gate\n");
+        return 1;
+    }
+
+    const char *stream_argv[] = {"/bin/true", NULL};
+    ish_embed_spawn_opts_t stream_opts = {0};
+    stream_opts.argv = stream_argv;
+    stream_opts.timeout_ms = 250;
+    ish_embed_session_t *stream = NULL;
+    uint64_t start = monotonic_ms();
+    int stream_rc = ish_embed_spawn(inst, &stream_opts, &stream);
+    uint64_t elapsed_ms = monotonic_ms() - start;
+
+    size_t bytes = 0, frames = 0;
+    ish_embed_test_control_usage(inst, &bytes, &frames);
+    int probe_rc = ish_embed_setup_vm_root(
+        inst, "/srv/vms/while-streaming-spawn-gated");
+    int ok = stream_rc == ISH_ERR_TIMEOUT && stream == NULL &&
+        elapsed_ms >= 150 && elapsed_ms <= 1000 &&
+        !atomic_load(&holder.done) && frames == 1 && probe_rc == ISH_OK;
+    if (!ok) {
+        fprintf(stderr,
+                "streaming spawn lock: rc=%d elapsed=%llums holder=%d "
+                "usage=%zu/%zu probe=%d\n",
+                stream_rc, (unsigned long long)elapsed_ms,
+                atomic_load(&holder.done), bytes, frames, probe_rc);
+    }
+
+    release_blocked_control_reader(0);
+    pthread_join(holder_thread, NULL);
+    ish_embed_test_control_usage(inst, &bytes, &frames);
+    if (holder.rc != ISH_OK || !holder.session || bytes != 0 || frames != 0)
+        ok = 0;
+
+    if (holder.session) ish_embed_session_close(holder.session);
+    ish_embed_session_close(trigger);
+    free(large_arg);
+    int shutdown_rc = ish_embed_shutdown(inst, 2000);
+    if (shutdown_rc != ISH_OK) ok = 0;
+    if (ok)
+        fprintf(stderr, "finite streaming SPAWN respected staging deadline: OK\n");
+    return ok ? 0 : 1;
+}
+
+static int test_control_finite_streaming_admission(void) {
+    g_mode = FAKE_CONTROL_SPAWN_GATE;
+    ish_embed_instance_t *inst = boot_instance();
+    ish_embed_session_t *trigger = spawn_echo(inst);
+    if (!wait_fake_flag(&g_control_reader_blocked, 2000)) {
+        fprintf(stderr, "finite streaming: fake reader did not block\n");
+        return 1;
+    }
+
+    uint8_t *input = (uint8_t *)malloc(65536u);
+    if (!input) return 1;
+    memset(input, 'f', 65536u);
+    struct bounded_queue_call blocker;
+    pthread_t blocker_thread;
+    if (start_bounded_queue_call(&blocker, &blocker_thread, trigger,
+                                 BOUNDED_QUEUE_WRITE, input, 65536u) != 0) {
+        free(input);
+        return 1;
+    }
+    if (!wait_control_frame_usage(inst, 1, 2000) ||
+        atomic_load(&blocker.done)) {
+        fprintf(stderr,
+                "finite streaming: writer did not remain backpressured\n");
+        release_blocked_control_reader(0);
+        pthread_join(blocker_thread, NULL);
+        free(input);
+        ish_embed_session_close(trigger);
+        (void)ish_embed_shutdown(inst, 2000);
+        return 1;
+    }
+
+    const char *argv[] = {"/bin/sleep", "forever", NULL};
+    ish_embed_spawn_opts_t opts = {0};
+    opts.argv = argv;
+    opts.timeout_ms = 1000;
+    ish_embed_session_t *session = NULL;
+
+    uint64_t spawn_start = monotonic_ms();
+    int spawn_rc = ish_embed_spawn(inst, &opts, &session);
+    uint64_t spawn_elapsed = monotonic_ms() - spawn_start;
+    uint64_t stdin_start = monotonic_ms();
+    int stdin_rc = session
+        ? ish_embed_session_close_stdin(session) : ISH_ERR_INTERNAL;
+    uint64_t stdin_elapsed = monotonic_ms() - stdin_start;
+    uint64_t terminate_start = monotonic_ms();
+    int terminate_rc = session
+        ? ish_embed_session_terminate(session, 1500) : ISH_ERR_INTERNAL;
+    uint64_t terminate_elapsed = monotonic_ms() - terminate_start;
+
+    size_t bytes = 0, frames = 0;
+    ish_embed_test_control_usage(inst, &bytes, &frames);
+    int ok = spawn_rc == ISH_OK && session != NULL &&
+        stdin_rc == ISH_OK && terminate_rc == ISH_OK &&
+        spawn_elapsed <= 500 && stdin_elapsed <= 500 &&
+        terminate_elapsed <= 500 && frames == 4 &&
+        !atomic_load(&blocker.done);
+    if (!ok) {
+        fprintf(stderr,
+                "finite streaming admission: spawn=%d/%llums stdin=%d/%llums "
+                "terminate=%d/%llums usage=%zu/%zu\n",
+                spawn_rc, (unsigned long long)spawn_elapsed,
+                stdin_rc, (unsigned long long)stdin_elapsed,
+                terminate_rc, (unsigned long long)terminate_elapsed,
+                bytes, frames);
+    }
+
+    release_blocked_control_reader(0);
+    pthread_join(blocker_thread, NULL);
+    if (blocker.rc != ISH_OK) ok = 0;
+    free(input);
+    if (session) {
+        uint8_t *buffer = NULL;
+        size_t length = 0;
+        int kind = 0;
+        uint64_t sequence = 0;
+        int32_t exit_code = 0;
+        int32_t signal_value = 0;
+        int read_rc = ish_embed_session_read(
+            session, 2000, &buffer, &length, &kind, &sequence,
+            &exit_code, &signal_value);
+        ish_embed_free(buffer);
+        if (read_rc != ISH_OK || kind != ISH_STREAM_EXITED ||
+            exit_code != 137 || signal_value != 9)
+            ok = 0;
+        ish_embed_session_close(session);
+    }
+    ish_embed_session_close(trigger);
+    int shutdown_rc = ish_embed_shutdown(inst, 2000);
+    if (shutdown_rc != ISH_OK) ok = 0;
+    if (ok)
+        fprintf(stderr,
+                "finite streaming controls admitted without writer wait: OK\n");
+    return ok ? 0 : 1;
+}
+
+static int test_control_finite_streaming_write_busy(void) {
+    g_mode = FAKE_CONTROL_CRITICAL_CLOSE;
+    ish_embed_instance_t *inst = boot_instance();
+    const char *argv[] = {"/bin/sleep", "forever", NULL};
+    ish_embed_spawn_opts_t opts = {0};
+    opts.argv = argv;
+    opts.timeout_ms = 1000;
+    ish_embed_session_t *session = NULL;
+    if (ish_embed_spawn(inst, &opts, &session) != ISH_OK || !session)
+        return 1;
+
+    ish_embed_session_t *trigger = spawn_echo(inst);
+    if (!wait_fake_flag(&g_control_reader_blocked, 2000)) {
+        fprintf(stderr,
+                "finite streaming write: fake reader did not block\n");
+        return 1;
+    }
+
+    uint8_t *input = (uint8_t *)malloc(65536u);
+    if (!input) return 1;
+    memset(input, 'w', 65536u);
+    struct bounded_queue_call blocker;
+    pthread_t blocker_thread;
+    if (start_bounded_queue_call(&blocker, &blocker_thread, session,
+                                 BOUNDED_QUEUE_WRITE, input, 65536u) != 0) {
+        free(input);
+        return 1;
+    }
+    if (!wait_control_frame_usage(inst, 1, 2000) ||
+        atomic_load(&blocker.done)) {
+        fprintf(stderr,
+                "finite streaming write: writer did not hold stdin order\n");
+        release_blocked_control_reader(0);
+        pthread_join(blocker_thread, NULL);
+        free(input);
+        return 1;
+    }
+
+    uint64_t close_start = monotonic_ms();
+    int close_rc = ish_embed_session_close_stdin(session);
+    uint64_t close_elapsed = monotonic_ms() - close_start;
+    uint64_t terminate_start = monotonic_ms();
+    int terminate_rc = ish_embed_session_terminate(session, 1500);
+    uint64_t terminate_elapsed = monotonic_ms() - terminate_start;
+    size_t frames = 0;
+    ish_embed_test_control_usage(inst, NULL, &frames);
+    int ok = close_rc == ISH_ERR_BUSY &&
+        strcmp(ish_embed_strerror(close_rc),
+               "operation cannot proceed while runtime state is busy") == 0 &&
+        close_elapsed <= 500 &&
+        terminate_rc == ISH_OK && terminate_elapsed <= 500 &&
+        frames == 2 && !atomic_load(&blocker.done);
+    if (!ok) {
+        fprintf(stderr,
+                "finite streaming write: close=%d/%llums terminate=%d/%llums "
+                "frames=%zu writer=%d\n",
+                close_rc, (unsigned long long)close_elapsed,
+                terminate_rc, (unsigned long long)terminate_elapsed,
+                frames, atomic_load(&blocker.done));
+    }
+
+    release_blocked_control_reader(0);
+    pthread_join(blocker_thread, NULL);
+    if (blocker.rc != ISH_OK ||
+        ish_embed_session_close_stdin(session) != ISH_OK)
+        ok = 0;
+    free(input);
+
+    uint8_t *buffer = NULL;
+    size_t length = 0;
+    int kind = 0;
+    uint64_t sequence = 0;
+    int32_t exit_code = 0;
+    int32_t signal_value = 0;
+    int read_rc = ish_embed_session_read(
+        session, 2000, &buffer, &length, &kind, &sequence,
+        &exit_code, &signal_value);
+    ish_embed_free(buffer);
+    if (read_rc != ISH_OK || kind != ISH_STREAM_EXITED ||
+        exit_code != 137 || signal_value != 9)
+        ok = 0;
+    ish_embed_session_close(session);
+    ish_embed_session_close(trigger);
+    if (ish_embed_shutdown(inst, 2000) != ISH_OK) ok = 0;
+    if (ok)
+        fprintf(stderr,
+                "finite stdin close stays bounded behind active write: OK\n");
+    return ok ? 0 : 1;
+}
+
+static int test_control_streaming_queue_deadline(void) {
+    g_mode = FAKE_WRITER_LOCK_HOLD;
+    ish_embed_instance_t *inst = boot_instance();
+    ish_embed_session_t *trigger = spawn_echo(inst);
+    struct bounded_queue_call holder;
+    pthread_t holder_thread;
+    if (start_bounded_queue_call(&holder, &holder_thread, trigger,
+                                 BOUNDED_QUEUE_RESIZE, NULL, 0) != 0)
+        return 1;
+    if (!wait_fake_flag(&g_writer_lock_held, 2000)) {
+        fprintf(stderr,
+                "streaming queue deadline: writer lock was not held\n");
+        pthread_mutex_lock(&g_fake_lock);
+        g_release_writer_lock = 1;
+        pthread_cond_broadcast(&g_fake_cond);
+        pthread_mutex_unlock(&g_fake_lock);
+        pthread_join(holder_thread, NULL);
+        return 1;
+    }
+
+    const char *argv[] = {"/bin/true", NULL};
+    ish_embed_spawn_opts_t opts = {0};
+    opts.argv = argv;
+    opts.timeout_ms = 100;
+    ish_embed_session_t *session = NULL;
+    uint64_t start = monotonic_ms();
+    int spawn_rc = ish_embed_spawn(inst, &opts, &session);
+    uint64_t elapsed_ms = monotonic_ms() - start;
+    int ok = spawn_rc == ISH_ERR_TIMEOUT && session == NULL &&
+        elapsed_ms >= 50 && elapsed_ms <= 500 &&
+        !atomic_load(&holder.done);
+    if (!ok) {
+        fprintf(stderr,
+                "streaming queue deadline: rc=%d session=%p elapsed=%llums "
+                "holder=%d\n",
+                spawn_rc, (void *)session,
+                (unsigned long long)elapsed_ms,
+                atomic_load(&holder.done));
+    }
+
+    pthread_mutex_lock(&g_fake_lock);
+    g_release_writer_lock = 1;
+    pthread_cond_broadcast(&g_fake_cond);
+    pthread_mutex_unlock(&g_fake_lock);
+    pthread_join(holder_thread, NULL);
+    if (holder.rc != ISH_OK) ok = 0;
+    ish_embed_session_close(trigger);
+    if (ish_embed_shutdown(inst, 2000) != ISH_OK) ok = 0;
+    if (ok)
+        fprintf(stderr,
+                "finite streaming SPAWN bounded queue admission: OK\n");
+    return ok ? 0 : 1;
+}
+
+static int test_control_streaming_precommit_deadline(void) {
+    g_mode = FAKE_WRITER_PRECOMMIT_DEADLINE;
+    ish_embed_instance_t *inst = boot_instance();
+    const char *argv[] = {"/bin/true", NULL};
+    ish_embed_spawn_opts_t opts = {0};
+    opts.argv = argv;
+    opts.timeout_ms = 100;
+    ish_embed_session_t *session = NULL;
+
+    uint64_t start = monotonic_ms();
+    int spawn_rc = ish_embed_spawn(inst, &opts, &session);
+    uint64_t elapsed_ms = monotonic_ms() - start;
+    size_t bytes = 1, frames = 1;
+    ish_embed_test_control_usage(inst, &bytes, &frames);
+    int ok = spawn_rc == ISH_ERR_TIMEOUT && session == NULL &&
+        elapsed_ms >= 100 && elapsed_ms <= 500 &&
+        bytes == 0 && frames == 0;
+    if (!ok) {
+        fprintf(stderr,
+                "streaming precommit deadline: rc=%d session=%p "
+                "elapsed=%llums usage=%zu/%zu\n",
+                spawn_rc, (void *)session,
+                (unsigned long long)elapsed_ms, bytes, frames);
+    }
+
+    if (ish_embed_shutdown(inst, 2000) != ISH_OK) ok = 0;
+    if (ok)
+        fprintf(stderr,
+                "finite streaming SPAWN rejected after precommit expiry: OK\n");
+    return ok ? 0 : 1;
+}
+
 static int test_supervisor_error_status(void) {
     g_mode = FAKE_SUPERVISOR_ERROR;
     ish_embed_instance_t *inst = boot_instance();
@@ -2519,6 +2885,12 @@ struct shutdown_arg {
     int rc;
 };
 
+static void *direct_shutdown_thread(void *raw) {
+    struct shutdown_arg *arg = raw;
+    arg->rc = ish_embed_shutdown(arg->inst, 2000);
+    return NULL;
+}
+
 static void *shutdown_thread(void *raw) {
     struct shutdown_arg *arg = raw;
     pthread_mutex_lock(&g_fake_lock);
@@ -2566,6 +2938,54 @@ static int test_double_shutdown(void) {
     }
     fprintf(stderr, "single shutdown owner: OK\n");
     return 0;
+}
+
+static int test_streaming_instance_gate_deadline(void) {
+    g_mode = FAKE_DOUBLE_SHUTDOWN;
+    ish_embed_instance_t *inst = boot_instance();
+    struct shutdown_arg shutdown = {.inst = inst, .rc = 123};
+    pthread_t shutdown_worker;
+    if (pthread_create(&shutdown_worker, NULL,
+                       direct_shutdown_thread, &shutdown) != 0)
+        return 1;
+    if (!wait_fake_flag(&g_shutdown_seen, 2000)) {
+        fprintf(stderr,
+                "streaming instance gate: shutdown did not hold singleton\n");
+        pthread_mutex_lock(&g_fake_lock);
+        g_release_shutdown = 1;
+        pthread_cond_broadcast(&g_fake_cond);
+        pthread_mutex_unlock(&g_fake_lock);
+        pthread_join(shutdown_worker, NULL);
+        return 1;
+    }
+
+    const char *argv[] = {"/bin/true", NULL};
+    ish_embed_spawn_opts_t opts = {0};
+    opts.argv = argv;
+    opts.timeout_ms = 100;
+    ish_embed_session_t *session = NULL;
+    uint64_t start = monotonic_ms();
+    int spawn_rc = ish_embed_spawn(inst, &opts, &session);
+    uint64_t elapsed_ms = monotonic_ms() - start;
+    int ok = spawn_rc == ISH_ERR_TIMEOUT && session == NULL &&
+        elapsed_ms >= 50 && elapsed_ms <= 500;
+    if (!ok) {
+        fprintf(stderr,
+                "streaming instance gate: rc=%d session=%p elapsed=%llums\n",
+                spawn_rc, (void *)session,
+                (unsigned long long)elapsed_ms);
+    }
+
+    pthread_mutex_lock(&g_fake_lock);
+    g_release_shutdown = 1;
+    pthread_cond_broadcast(&g_fake_cond);
+    pthread_mutex_unlock(&g_fake_lock);
+    pthread_join(shutdown_worker, NULL);
+    if (shutdown.rc != ISH_OK) ok = 0;
+    if (ok)
+        fprintf(stderr,
+                "finite streaming SPAWN bounded singleton admission: OK\n");
+    return ok ? 0 : 1;
 }
 
 struct setup_arg {
@@ -2910,7 +3330,7 @@ int main(int argc, char **argv) {
         return 2;
     }
     if (argc != 2) {
-        fprintf(stderr, "usage: %s boot-timeout|bad-hello-ack|install-failure|bundled-supervisor-digest-mismatch|bundled-supervisor-path-mismatch|custom-supervisor|boot-null-output|stdin-close-order|control-frame-limit|control-critical-close|control-same-session-close|control-exited-same-session-close|signal-close-order|resize-close-order|terminate-close-order|control-critical-oneshot|control-preblocked-oneshot|control-byte-limit|control-byte-reserve|control-spawn-gate|control-oneshot-spawn-lock|supervisor-error|close-race|backlog|frame-backlog|backlog-control-pressure|borrow-shutdown|double-shutdown|active-call|broken-control|protocol-fatal|protocol-fatal-control-pressure|malformed-event TYPE|output-allocation-failure|spawn-argument-bound|shutdown-drain|log-backpressure|oneshot-timeout|oneshot-output\n", argv[0]);
+        fprintf(stderr, "usage: %s boot-timeout|bad-hello-ack|install-failure|bundled-supervisor-digest-mismatch|bundled-supervisor-path-mismatch|custom-supervisor|boot-null-output|stdin-close-order|control-frame-limit|control-critical-close|control-same-session-close|control-exited-same-session-close|signal-close-order|resize-close-order|terminate-close-order|control-critical-oneshot|control-preblocked-oneshot|control-byte-limit|control-byte-reserve|control-spawn-gate|control-oneshot-spawn-lock|control-streaming-spawn-lock|control-finite-streaming|control-finite-streaming-write|control-streaming-queue-deadline|control-streaming-precommit-deadline|streaming-instance-gate|supervisor-error|close-race|backlog|frame-backlog|backlog-control-pressure|borrow-shutdown|double-shutdown|active-call|broken-control|protocol-fatal|protocol-fatal-control-pressure|malformed-event TYPE|output-allocation-failure|spawn-argument-bound|shutdown-drain|log-backpressure|oneshot-timeout|oneshot-output\n", argv[0]);
         return 2;
     }
     if (strcmp(argv[1], "boot-timeout") == 0) return test_boot_timeout_cleanup();
@@ -2944,6 +3364,13 @@ int main(int argc, char **argv) {
     if (strcmp(argv[1], "control-byte-reserve") == 0) return test_control_byte_reserve();
     if (strcmp(argv[1], "control-spawn-gate") == 0) return test_control_spawn_staging_gate();
     if (strcmp(argv[1], "control-oneshot-spawn-lock") == 0) return test_control_oneshot_spawn_lock_deadline();
+    if (strcmp(argv[1], "control-streaming-spawn-lock") == 0) return test_control_streaming_spawn_lock_deadline();
+    if (strcmp(argv[1], "control-finite-streaming") == 0) return test_control_finite_streaming_admission();
+    if (strcmp(argv[1], "control-finite-streaming-write") == 0) return test_control_finite_streaming_write_busy();
+    if (strcmp(argv[1], "control-streaming-queue-deadline") == 0) return test_control_streaming_queue_deadline();
+    if (strcmp(argv[1], "control-streaming-precommit-deadline") == 0)
+        return test_control_streaming_precommit_deadline();
+    if (strcmp(argv[1], "streaming-instance-gate") == 0) return test_streaming_instance_gate_deadline();
     if (strcmp(argv[1], "supervisor-error") == 0) return test_supervisor_error_status();
     if (strcmp(argv[1], "close-race") == 0) return test_close_race();
     if (strcmp(argv[1], "backlog") == 0) return test_backlog_limit();

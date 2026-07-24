@@ -111,6 +111,11 @@ enum outbound_admission_class {
 struct ish_embed_session {
     ish_embed_instance_t *inst;
     uint32_t              id;
+    /* A finite streaming spawn uses ordered asynchronous control admission.
+     * This keeps its SPAWN/EOF/terminate path bounded even when the writer is
+     * stalled, while zero-timeout legacy sessions retain synchronous delivery
+     * semantics. */
+    int                   bounded_streaming_controls;
     int                   stdin_closed;
     int                   closing;
     int                   guest_exited;
@@ -208,13 +213,26 @@ static ish_embed_instance_t *g_instance = NULL;
 static pthread_mutex_t       g_instance_lock = PTHREAD_MUTEX_INITIALIZER;
 static int                   g_boot_consumed = 0;
 
+static uint64_t now_ms(void);
+static int mutex_lock_until(pthread_mutex_t *lock, uint64_t deadline_ms);
+
 /* Hold the singleton gate just long enough to prove the opaque instance is
  * still live, then account for the call under lifecycle_lock. shutdown holds
  * g_instance_lock while checking active_calls, so it cannot free an instance
  * between this check and the increment. */
-static int instance_call_begin(ish_embed_instance_t *inst) {
+static int instance_call_begin_until(ish_embed_instance_t *inst,
+                                     uint64_t deadline_ms) {
     if (!inst) return ISH_ERR_INVALID_ARG;
-    pthread_mutex_lock(&g_instance_lock);
+    if (deadline_ms == 0) {
+        pthread_mutex_lock(&g_instance_lock);
+    } else {
+        if (!mutex_lock_until(&g_instance_lock, deadline_ms))
+            return ISH_ERR_TIMEOUT;
+        if (now_ms() >= deadline_ms) {
+            pthread_mutex_unlock(&g_instance_lock);
+            return ISH_ERR_TIMEOUT;
+        }
+    }
     if (g_instance != inst) {
         pthread_mutex_unlock(&g_instance_lock);
         return ISH_ERR_INVALID_ARG;
@@ -228,6 +246,10 @@ static int instance_call_begin(ish_embed_instance_t *inst) {
     pthread_mutex_unlock(&inst->lifecycle_lock);
     pthread_mutex_unlock(&g_instance_lock);
     return ISH_OK;
+}
+
+static int instance_call_begin(ish_embed_instance_t *inst) {
+    return instance_call_begin_until(inst, 0);
 }
 
 static void instance_call_end(ish_embed_instance_t *inst) {
@@ -465,7 +487,8 @@ static int enqueue_frame(ish_embed_instance_t *inst,
                          uint8_t type, uint8_t flags, uint32_t sid,
                          const void *payload, uint32_t payload_len,
                          int wait_for_completion,
-                         enum outbound_admission_class admission_class) {
+                         enum outbound_admission_class admission_class,
+                         uint64_t deadline_ms) {
     if (!inst || (payload_len > 0 && !payload) ||
         payload_len > ISH_EMBED_MAX_PROTOCOL_FRAME_BYTES)
         return ISH_ERR_INVALID_ARG;
@@ -477,7 +500,20 @@ static int enqueue_frame(ish_embed_instance_t *inst,
      * and completion. This prevents an unbounded number of concurrent callers
      * from each allocating a maximum-sized frame before discovering the queue
      * is full. The counters include the writer's current dequeued frame. */
-    pthread_mutex_lock(&inst->writer_lock);
+    if (deadline_ms == 0) {
+        pthread_mutex_lock(&inst->writer_lock);
+    } else {
+        if (!mutex_lock_until(&inst->writer_lock, deadline_ms))
+            return ISH_ERR_TIMEOUT;
+        if (now_ms() >= deadline_ms) {
+            pthread_mutex_unlock(&inst->writer_lock);
+            return ISH_ERR_TIMEOUT;
+        }
+    }
+#ifdef ISH_EMBED_TESTING
+    extern void ish_embed_test_after_writer_lock(uint8_t type);
+    ish_embed_test_after_writer_lock(type);
+#endif
     if (!inst->writer_thread_alive || atomic_load(&inst->writer_stopping) ||
         (atomic_load(&inst->shutting_down) && type != ISH_FT_SHUTDOWN)) {
         int result = atomic_load(&inst->writer_stopping)
@@ -513,11 +549,22 @@ static int enqueue_frame(ish_embed_instance_t *inst,
     }
     frame->len = frame_len;
     frame->wait_for_completion = wait_for_completion;
-    frame->accounted = 1;
     ish_proto_pack_hdr(frame->bytes, type, flags, payload_len, sid);
     if (payload_len)
         memcpy(frame->bytes + ISH_PROTO_HDR_SIZE, payload, payload_len);
 
+    /* Allocation and a maximum-sized payload copy can consume the remainder of
+     * a short deadline after the first check. Queue admission is the instant
+     * the frame becomes visible, so reject an expired finite call immediately
+     * before linking it rather than publishing a late SPAWN. */
+    if (deadline_ms != 0 && now_ms() >= deadline_ms) {
+        pthread_cond_destroy(&frame->done_cond);
+        free(frame);
+        pthread_mutex_unlock(&inst->writer_lock);
+        return ISH_ERR_TIMEOUT;
+    }
+
+    frame->accounted = 1;
     inst->writer_accounted_bytes += frame_len;
     inst->writer_accounted_frames++;
     frame->next = NULL;
@@ -543,7 +590,7 @@ static int send_frame(ish_embed_instance_t *inst,
                       uint8_t type, uint8_t flags, uint32_t sid,
                       const void *payload, uint32_t payload_len) {
     return enqueue_frame(inst, type, flags, sid, payload, payload_len, 1,
-                         OUTBOUND_ADMISSION_NORMAL);
+                         OUTBOUND_ADMISSION_NORMAL, 0);
 }
 
 static int send_frame_async_normal(ish_embed_instance_t *inst,
@@ -551,7 +598,16 @@ static int send_frame_async_normal(ish_embed_instance_t *inst,
                                    const void *payload,
                                    uint32_t payload_len) {
     return enqueue_frame(inst, type, flags, sid, payload, payload_len, 0,
-                         OUTBOUND_ADMISSION_NORMAL);
+                         OUTBOUND_ADMISSION_NORMAL, 0);
+}
+
+static int send_frame_async_normal_until(
+        ish_embed_instance_t *inst,
+        uint8_t type, uint8_t flags, uint32_t sid,
+        const void *payload, uint32_t payload_len,
+        uint64_t deadline_ms) {
+    return enqueue_frame(inst, type, flags, sid, payload, payload_len, 0,
+                         OUTBOUND_ADMISSION_NORMAL, deadline_ms);
 }
 
 /* Lifecycle callers use capacity reserved inside the same total queue ceiling
@@ -563,7 +619,7 @@ static int send_lifecycle_frame_async(ish_embed_instance_t *inst,
                                       const void *payload,
                                       uint32_t payload_len) {
     return enqueue_frame(inst, type, flags, sid, payload, payload_len, 0,
-                         OUTBOUND_ADMISSION_LIFECYCLE);
+                         OUTBOUND_ADMISSION_LIFECYCLE, 0);
 }
 
 #ifdef ISH_EMBED_TESTING
@@ -1557,6 +1613,7 @@ static int spawn_live_instance_serialized(ish_embed_instance_t *inst,
     if (!s) return ISH_ERR_OOM;
     s->inst = inst;
     s->id   = sid;
+    s->bounded_streaming_controls = deadline_ms != 0;
     s->references = 1;
     pthread_mutex_init(&s->stdin_lock, NULL);
     pthread_mutex_init(&s->lock, NULL);
@@ -1598,8 +1655,8 @@ static int spawn_live_instance_serialized(ish_embed_instance_t *inst,
     if (opts->merge_stderr_into_stdout)  flags |= ISH_FF_MERGE_STDERR;
     rc = wait_for_write
         ? send_frame(inst, ISH_FT_SPAWN, flags, sid, payload, plen)
-        : send_frame_async_normal(inst, ISH_FT_SPAWN, flags, sid,
-                                  payload, plen);
+        : send_frame_async_normal_until(inst, ISH_FT_SPAWN, flags, sid,
+                                        payload, plen, deadline_ms);
     free(payload);
     if (rc != 0) {
         session_unlink(inst, s);
@@ -1642,9 +1699,13 @@ int ish_embed_spawn(ish_embed_instance_t *inst,
     if (!opts || !out_session || !opts->argv || !opts->argv[0])
         return ISH_ERR_INVALID_ARG;
     *out_session = NULL;
-    int gate = instance_call_begin(inst);
+    uint64_t deadline = opts->timeout_ms > 0
+        ? now_ms() + opts->timeout_ms : 0;
+    int gate = instance_call_begin_until(inst, deadline);
     if (gate != ISH_OK) return gate;
-    int rc = spawn_live_instance(inst, opts, out_session);
+    int rc = deadline != 0
+        ? spawn_live_instance_async_until(inst, opts, out_session, deadline)
+        : spawn_live_instance(inst, opts, out_session);
     instance_call_end(inst);
     return rc;
 }
@@ -1653,7 +1714,7 @@ static int spawn_oneshot_until(ish_embed_instance_t *inst,
                                const ish_embed_spawn_opts_t *opts,
                                ish_embed_session_t **out_session,
                                uint64_t deadline_ms) {
-    int gate = instance_call_begin(inst);
+    int gate = instance_call_begin_until(inst, deadline_ms);
     if (gate != ISH_OK) return gate;
     int rc = spawn_live_instance_async_until(
         inst, opts, out_session, deadline_ms);
@@ -1796,12 +1857,16 @@ static int send_session_control(ish_embed_session_t *s, uint8_t type,
     s->active_controls++;
     ish_embed_instance_t *inst = s->inst;
     uint32_t sid = s->id;
+    int bounded_streaming_controls = s->bounded_streaming_controls;
     pthread_mutex_unlock(&s->lock);
 #ifdef ISH_EMBED_TESTING
     extern void ish_embed_test_after_session_control_admission(uint8_t type);
     ish_embed_test_after_session_control_admission(type);
 #endif
-    int rc = send_frame(inst, type, 0, sid, payload, payload_len);
+    int rc = bounded_streaming_controls && type == ISH_FT_TERMINATE
+        ? send_lifecycle_frame_async(
+            inst, type, 0, sid, payload, payload_len)
+        : send_frame(inst, type, 0, sid, payload, payload_len);
     pthread_mutex_lock(&s->lock);
     s->active_controls--;
     pthread_cond_broadcast(&s->cond);
@@ -1836,7 +1901,14 @@ int ish_embed_session_terminate(ish_embed_session_t *s, uint32_t grace_ms) {
 
 int ish_embed_session_close_stdin(ish_embed_session_t *s) {
     if (!s) return ISH_ERR_INVALID_ARG;
-    pthread_mutex_lock(&s->stdin_lock);
+    int bounded_streaming_controls = s->bounded_streaming_controls;
+    if (bounded_streaming_controls) {
+        int lock_rc = pthread_mutex_trylock(&s->stdin_lock);
+        if (lock_rc == EBUSY) return ISH_ERR_BUSY;
+        if (lock_rc != 0) return ISH_ERR_THREAD;
+    } else {
+        pthread_mutex_lock(&s->stdin_lock);
+    }
     pthread_mutex_lock(&s->lock);
     if (s->closing) {
         pthread_mutex_unlock(&s->lock);
@@ -1852,7 +1924,10 @@ int ish_embed_session_close_stdin(ish_embed_session_t *s) {
         pthread_mutex_unlock(&s->stdin_lock);
         return ISH_OK;
     }
-    int rc = send_frame(inst, ISH_FT_STDIN_CLOSE, 0, sid, NULL, 0);
+    int rc = bounded_streaming_controls
+        ? send_frame_async_normal(
+            inst, ISH_FT_STDIN_CLOSE, 0, sid, NULL, 0)
+        : send_frame(inst, ISH_FT_STDIN_CLOSE, 0, sid, NULL, 0);
     if (rc != ISH_OK) {
         pthread_mutex_lock(&s->lock);
         if (!s->closing) s->stdin_closed = 0;
@@ -2272,7 +2347,7 @@ const char *ish_embed_strerror(int s) {
         case ISH_ERR_OOM: return "out of memory";
         case ISH_ERR_BROKEN_PIPE: return "broken pipe to supervisor";
         case ISH_ERR_OUTPUT_LIMIT: return "native session output backlog exceeded";
-        case ISH_ERR_BUSY: return "active sessions must be closed before shutdown";
+        case ISH_ERR_BUSY: return "operation cannot proceed while runtime state is busy";
         case ISH_ERR_SUPERVISOR_INSTALL: return "bundled supervisor installation failed";
         case ISH_ERR_CONTROL_LIMIT: return "host control queue limit reached";
         case ISH_ERR_INTERNAL: return "internal error";

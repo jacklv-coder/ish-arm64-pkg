@@ -13,15 +13,15 @@ RootFS 安装、产品级命令策略、Swift Concurrency 隔离和界面。项�
 
 ## 当前阶段：Native ABI 过渡
 
-当前默认分支已发布 `v0.4.0-abi.3`，正在准备兼容性维护预发布
-`v0.4.0-abi.4`。它们都属于 **Stage1 native ABI 过渡**，不是稳定 `v0.4.0`，
+当前默认分支已发布 `v0.4.0-abi.4`，正在准备兼容性维护预发布
+`v0.4.0-abi.5`。它们都属于 **Stage1 native ABI 过渡**，不是稳定 `v0.4.0`，
 也不是完整 v0.4 Swift API。请同时区分下面四个版本面：
 
-| 版本面 | 当前 `v0.4.0-abi.3` | 计划中的 `v0.4.0-abi.4` |
+| 版本面 | 当前 `v0.4.0-abi.4` | 计划中的 `v0.4.0-abi.5` |
 | --- | --- | --- |
 | 公开 C ABI | `ISH_EMBED_ABI_VERSION == 1`；兼容性符号已发布 | 仍为 ABI 1，不新增公开符号 |
 | 内部 wire protocol | host 与内嵌 supervisor 精确匹配 v4 | 仍为 v4；它不是公开 C ABI 版本 |
-| `Package.swift` | 固定已公开的 `v0.4.0-abi.3` URL/checksum | 发布事务生成只改 manifest 的 release commit，固定到维护二进制 |
+| `Package.swift` | 固定已公开的 `v0.4.0-abi.4` URL/checksum | 发布事务生成只改 manifest 的 release commit，固定到维护二进制 |
 | Swift 源 | 保持 v0.3.3 ABI 兼容，不调用 retain/release | 保持相同 Swift API 与旧 ABI 用法 |
 
 Stage1 的 native runtime 已加入 session retain/release、可等待 kernel 线程、soft-halt、
@@ -68,13 +68,13 @@ JIT 脏页一致性必须修改模拟器核心，无法只在 outer package 或 
 窄差异拥有独立 PR、CI 和精确 gitlink，PocketRoot 的构建与发布也因此可复现。我们不会在
 本地直接改写别人维护的上游仓库；适合通用化的修复仍可回馈
 [iSH upstream](https://github.com/ish-app/ish)，但在上游接受并发布前由 fork 承担项目门禁。
-当前 `v0.4.0-abi.4` 源码变更不纳入 RootFS，也不提交任何预构建
+当前 `v0.4.0-abi.5` 源码变更不纳入 RootFS，也不提交任何预构建
 XCFramework/guest binary；二进制只能在后续发布事务通过后生成和发布。
 
 ## 安装状态
 
-`v0.4.0-abi.3` 已公开且当前 [`Package.swift`](Package.swift) 固定到它。
-`v0.4.0-abi.4` 发布前，manifest 继续指向这个已验证的资产，不会提前引用 404 URL。
+`v0.4.0-abi.4` 已公开且当前 [`Package.swift`](Package.swift) 固定到它。
+`v0.4.0-abi.5` 发布前，manifest 继续指向这个已验证的资产，不会提前引用 404 URL。
 在 Xcode 的 **File → Add Package Dependencies…** 中使用：
 
 ```text
@@ -84,8 +84,8 @@ https://github.com/jacklv-coder/ish-arm64-pkg
 请选择明确包含 `libIshKernel.xcframework.zip`、对应源码归档，并且 manifest URL/checksum
 与同一标签匹配的版本。业务工程不需要安装 Meson、Zig 或 LLVM。
 
-`v0.4.0-abi.4` 只修复嵌入启动线程与 guest task 线程继承的内部 SIGUSR1 屏蔽，
-使 guest signal 能可靠打断阻塞中的宿主 syscall；它不实现原生 Agent Loop，也不会
+`v0.4.0-abi.5` 为有限 streaming session 增加端到端 control-path deadline 语义；
+它不实现原生 Agent Loop，也不会
 在 App 内安装 Codex CLI。Node.js/npm 如有需要仍由
 RootFS/guest 包管理流程选择，不属于 runtime 的强制依赖。
 
@@ -108,9 +108,12 @@ let result = try instance.runOneshot(
 print(String(decoding: result.stdoutData, as: UTF8.self))
 ```
 
-`IshSpawnOptions.timeout` 只由 `runOneshot` 使用。有限超时从 API 入口开始，包含
-SPAWN staging gate 和控制队列接纳；如果 runtime 无法确认命令已清理，会转入
-shutting-down 状态而不是遗留无主 guest 进程。NaN/正负无穷会在进入 native 前返回
+`IshSpawnOptions.timeout` 同时适用于 `runOneshot` 与 streaming `spawn`。有限超时从
+API 入口开始，包含 SPAWN staging gate 和控制队列接纳；有限 streaming session 的
+SPAWN、stdin close 与 terminate 采用保持顺序的有界异步接纳，调用方仍须读取权威
+`EXITED` 才能确认终止。stdin close 遇到 active stdin write 时返回 `ISH_ERR_BUSY`，
+不会排在它后面等待。如果 runtime 无法确认命令已清理，会转入 shutting-down 状态而
+不是遗留无主 guest 进程。NaN/正负无穷会在进入 native 前返回
 `ISH_ERR_INVALID_ARG (-13)`；正但小于 1 ms 的值向上取整为 1 ms，不会退化成“无超时”。
 
 只有当已校验的 RootFS manifest 明确包含 `/srv/vms/.template` 时，才可使用
@@ -121,7 +124,7 @@ shutting-down 状态而不是遗留无主 guest 进程。NaN/正负无穷会在�
 let vm = try instance.ensureDefaultVM()
 let session = try instance.spawn(
     in: vm,
-    .init(argv: ["/bin/sh"], allocateTTY: false)
+    .init(argv: ["/bin/sh"], allocateTTY: false, timeout: 10)
 )
 defer { session.close() }
 

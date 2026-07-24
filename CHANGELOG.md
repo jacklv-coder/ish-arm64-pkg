@@ -4,7 +4,25 @@
 
 本仓库以中文变更日志为主，并同步维护英文镜像。
 
-## v0.4.0-abi.4（计划中的 Stage1 维护预发布）
+## v0.4.0-abi.5（计划中的 Stage1 维护预发布）
+
+这是 `v0.4.0-abi.4` 之后的兼容性维护版本，仍是 prerelease，**不是稳定
+v0.4.0**。
+
+- 有限 `timeout_ms` 的 streaming `ish_embed_spawn` 现在从 API 入口覆盖 instance gate、
+  SPAWN staging gate 与控制队列接纳；deadline 前无法取得任一 gate 时返回
+  `ISH_ERR_TIMEOUT`，不会创建 session。
+- 有限 timeout session 的 SPAWN、stdin close 与 terminate 使用保持顺序的有界异步接纳，
+  因此被阻塞的 control writer 不会消耗产品命令期限。stdin close 遇到正在持有顺序锁的
+  stdin write 时返回 `ISH_ERR_BUSY`，不会在其后无限等待；调用方仍须读取权威 `EXITED`
+  才能确认命令终止。
+- `timeout_ms == 0` 的既有 streaming API 继续保持同步写入语义。公开 C ABI 仍为 1，
+  wire protocol 仍为 v4，未新增公开符号。
+- host lifecycle 测试新增有限 streaming 的 instance/staging/queue gate 超时、writer
+  停滞下 `SPAWN → STDIN_CLOSE → TERMINATE → EXITED` 的有界顺序回归，以及 active write
+  后 stdin close 保持有界的回归。
+
+## v0.4.0-abi.4（已发布的 Stage1 维护预发布）
 
 这是 `v0.4.0-abi.3` 之后的兼容性维护版本，仍是 prerelease，**不是稳定
 v0.4.0**。

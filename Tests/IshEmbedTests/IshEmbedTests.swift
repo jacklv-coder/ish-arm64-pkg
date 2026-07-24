@@ -55,6 +55,7 @@ private final class LifecycleNativeHarness: @unchecked Sendable {
     private let oneshotBody:
         (UnsafeMutablePointer<ish_embed_oneshot_result_t>) -> Int32
     private let timeoutObservedBody: (UInt32) -> Void
+    private let spawnTimeoutObservedBody: (UInt32) -> Void
     private let sessionCloseBody: () -> Void
     private let bufferFreedBody: () -> Void
     private let lock = NSLock()
@@ -73,12 +74,14 @@ private final class LifecycleNativeHarness: @unchecked Sendable {
                 _ in -99
             },
          timeoutObservedBody: @escaping (UInt32) -> Void = { _ in },
+         spawnTimeoutObservedBody: @escaping (UInt32) -> Void = { _ in },
          sessionCloseBody: @escaping () -> Void = {},
          bufferFreedBody: @escaping () -> Void = {}) {
         self.spawnResult = spawnResult
         self.shutdownResults = shutdownResults
         self.oneshotBody = oneshotBody
         self.timeoutObservedBody = timeoutObservedBody
+        self.spawnTimeoutObservedBody = spawnTimeoutObservedBody
         self.sessionCloseBody = sessionCloseBody
         self.bufferFreedBody = bufferFreedBody
     }
@@ -116,10 +119,11 @@ private final class LifecycleNativeHarness: @unchecked Sendable {
                 timeoutObservedBody(opts.pointee.timeout_ms)
                 return oneshotBody(result)
             },
-            spawn: { [self] _, _ in
+            spawn: { [self] _, opts in
                 lock.lock()
                 spawnCalls += 1
                 lock.unlock()
+                spawnTimeoutObservedBody(opts.pointee.timeout_ms)
                 return (spawnResult,
                         spawnResult == 0 ? sessionRaw : nil)
             },
@@ -387,10 +391,14 @@ final class IshEmbedTests: XCTestCase {
 
     func testTimeoutConversionRejectsNonFiniteValuesBeforeNativeEntry() throws {
         let observedTimeout = LockedResults(count: 1)
+        let observedSpawnTimeout = LockedResults(count: 1)
         let native = LifecycleNativeHarness(
             oneshotBody: { _ in -12 },
             timeoutObservedBody: { value in
                 observedTimeout.set(Int32(value), at: 0)
+            },
+            spawnTimeoutObservedBody: { value in
+                observedSpawnTimeout.set(Int32(value), at: 0)
             })
         let instance = IshInstance(nativeCalls: native.nativeCalls())
         try instance.boot(.init(rootfsPath: "/unused-test-rootfs"))
@@ -413,7 +421,21 @@ final class IshEmbedTests: XCTestCase {
         XCTAssertEqual(observedTimeout.snapshot(), [1],
                        "positive sub-millisecond timeout must not become no-timeout")
 
-        let session = try instance.spawn(.init(argv: ["/bin/true"]))
+        for invalid in [TimeInterval.nan,
+                        TimeInterval.infinity,
+                        -TimeInterval.infinity] {
+            XCTAssertThrowsError(try instance.spawn(
+                .init(argv: ["/bin/true"], timeout: invalid))) {
+                XCTAssertEqual(ishErrorCode($0), -13)
+            }
+        }
+        XCTAssertEqual(native.counts().spawn, 0,
+                       "invalid timeout must not enter native spawn")
+
+        let session = try instance.spawn(
+            .init(argv: ["/bin/true"], timeout: 0.000_1))
+        XCTAssertEqual(observedSpawnTimeout.snapshot(), [1],
+                       "finite streaming timeout must reach native spawn")
         for invalid in [TimeInterval.nan,
                         TimeInterval.infinity,
                         -TimeInterval.infinity] {

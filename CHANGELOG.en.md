@@ -4,7 +4,28 @@
 
 Chinese is the primary changelog and this file is its maintained English mirror.
 
-## v0.4.0-abi.4 (planned Stage1 maintenance prerelease)
+## v0.4.0-abi.5 (planned Stage1 maintenance prerelease)
+
+This is a compatibility maintenance release after `v0.4.0-abi.4`. It remains a
+prerelease and is **not stable v0.4.0**.
+
+- A finite `timeout_ms` on streaming `ish_embed_spawn` now covers the SPAWN
+  instance gate, staging gate, and control-queue admission from API entry.
+  Failure to acquire any gate before the deadline returns `ISH_ERR_TIMEOUT`
+  without a session.
+- Finite-timeout sessions use ordered, bounded asynchronous admission for
+  SPAWN, stdin close, and terminate, so a stalled control writer cannot consume
+  the product command deadline. Stdin close returns `ISH_ERR_BUSY` instead of
+  waiting behind an active stdin write. Callers must still read authoritative
+  `EXITED` before confirming termination.
+- Existing streaming calls with `timeout_ms == 0` retain synchronous-write
+  semantics. The public C ABI remains 1, wire protocol remains v4, and no public
+  symbol is added.
+- Host lifecycle tests cover finite streaming instance/staging/queue-gate
+  expiry, ordered `SPAWN → STDIN_CLOSE → TERMINATE → EXITED` under a stalled
+  writer, and bounded stdin close behind an active write.
+
+## v0.4.0-abi.4 (published Stage1 maintenance prerelease)
 
 This is a compatibility maintenance release after `v0.4.0-abi.3`. It remains a
 prerelease and is **not stable v0.4.0**.

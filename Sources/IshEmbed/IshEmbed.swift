@@ -44,6 +44,11 @@ public struct IshSpawnOptions {
     public var env: [String: String]?
     public var allocateTTY: Bool
     public var mergeStderrIntoStdout: Bool
+    /// For oneshot commands, bounds the complete native execution and cleanup
+    /// path. For streaming spawn, bounds SPAWN staging/admission and selects
+    /// ordered bounded admission for stdin close and terminate. Callers still
+    /// confirm streaming termination by reading the authoritative exit event;
+    /// stdin close may report busy while an active write owns its order gate.
     public var timeout: TimeInterval?
     /// If non-nil, the child chroots to this guest path before exec.
     /// Used for VM-style isolation; pass `/srv/vms/<name>` to confine

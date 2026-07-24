@@ -206,8 +206,11 @@ in-flight 或同步 waiter 最终释放为止都计入预算；检查发生在�
 guest PID 1 以 EOF 清理全部 child。spawn 的 measure/build/send/free 由单独 gate 串行化，
 防止多个约 1 MiB 的 staging payload 在控制预算之外同时存在；stop、EOF 与错误 drain 都
 走同一释放和记账路径。
-关键字节 reserve 在编译期被要求至少容纳最小 lifecycle frame；有限 oneshot
-deadline 从 API 入口开始，同时覆盖 spawn gate 等待和 SPAWN 队列接纳。
+关键字节 reserve 在编译期被要求至少容纳最小 lifecycle frame；有限 oneshot 和
+streaming spawn 的 deadline 都从 API 入口开始，同时覆盖 instance gate、spawn gate 和
+SPAWN 队列接纳。有限 streaming session 的 SPAWN、stdin close 与 terminate 采用保持
+顺序的异步接纳，避免 control writer 停滞吞掉产品期限。stdin close 遇到 active stdin
+write 时返回 `ISH_ERR_BUSY` 而不是等待；终止完成仍以 `EXITED` 为准。
 
 Stage1 Swift 尚未交付新的 typed status 和 Terminal callback 有界投递；不能把 native
 积压上限误写成 Stage2 Swift callback 策略已完成。

@@ -15,24 +15,24 @@ iOS 18 二进制、内部 wire v4 和发布供应链处于同一可解释状态�
 | native 集成 | `internal-signal-mask`、`procfs_test`、`ishembed_smoke` | 嵌入/guest task 内部 SIGUSR1 mask、fakefs、spawn、procfs、真实 guest `uname -a`、通用命令链路 | RootFS 来源/许可可信；特定用户工具兼容性 |
 | sanitizer | ASan/UBSan，必要时 TSan | 已覆盖路径上的越界、UAF、未定义行为和数据竞争 | 所有调度组合都无缺陷 |
 | Swift RootFS-free | instance/session gate、shutdown retry、公开 API smoke | oneshot/session lease 阻止旧 ABI UAF、失败保留 handle、旧公开签名可编译 | 任意 C 调用都可取消或 close 始终有界 |
-| Swift manifest 真链接 | `test-swift-ios.sh --manifest-binary` | Stage1 Swift 与当前 `v0.4.0-abi.3` binary 链接 | `v0.4.0-abi.4` 修复已公开 |
+| Swift manifest 真链接 | `test-swift-ios.sh --manifest-binary` | Stage1 Swift 与当前 `v0.4.0-abi.4` binary 链接 | `v0.4.0-abi.5` 修复已公开 |
 | Swift local 真链接 | `test-swift-ios.sh --local-binary` | 同一 Swift 与待发布维护 XCFramework 链接 | GitHub 资产已发布 |
 | XCFramework | `build-ios.sh` + symbol/final-link 检查 | device/simulator arm64、最低 iOS 18、必需符号 | App 产品逻辑 |
 | 文档/脚本 | docs 正负门禁、shell syntax、策略测试 | 双语链接、失败诊断、release notes/version/tag/source policy | 文档本身等于实现 |
 
 ## 先确认 Stage1 状态
 
-`v0.4.0-abi.4` 发布前应同时满足：
+`v0.4.0-abi.5` 发布前应同时满足：
 
 - `ISH_EMBED_ABI_VERSION` 为 1；
 - `ISH_PROTO_VERSION` 为 4；
 - Swift 源不调用 `ish_embed_session_retain/release`；
-- `Package.swift` 仍固定已公开的 `v0.4.0-abi.3`；
+- `Package.swift` 仍固定已公开的 `v0.4.0-abi.4`；
 - 本地构建的新 XCFramework 导出 retain/release、join/soft-halt 等必需符号；
 - RootFS 没有出现在 Git diff、XCFramework、source archive 或 Release 清单中。
 
-发布后才把“manifest 固定到 `v0.4.0-abi.4`”加入预期。不能用发布后的预期否定
-发布前仍引用已验证 `v0.4.0-abi.3` 的正确状态。
+发布后才把“manifest 固定到 `v0.4.0-abi.5`”加入预期。不能用发布后的预期否定
+发布前仍引用已验证 `v0.4.0-abi.4` 的正确状态。
 
 ## 快速元数据与脚本门禁
 
@@ -97,9 +97,11 @@ meson test -C build-test --print-errorlogs
   `ISH_ERR_SUPERVISOR_INSTALL` 失败。显式自定义路径不走默认 blob 安装/摘要校验；这些
   测试证明构建内一致性，不证明数字签名或来源认证；
 - shutdown 在 live session/active call 时返回 busy，正常路径 soft-halt 并 join；
-- control queue 的普通/关键 frame/byte 上限、饱和时 close/有限 oneshot 的有界 EOF fallback、
-  stop/finish 精确释放，以及阻塞 reader 下 spawn staging gate；测试使用较小预算让溢出与
-  复用路径可确定复现；
+- control queue 的普通/关键 frame/byte 上限、饱和时 close/有限 oneshot 的有界 EOF
+  fallback、有限 streaming 的 instance/staging/queue gate deadline、writer 停滞下的
+  有界 stdin-close/terminate、active write 后返回 busy 的 stdin-close、stop/finish 精确
+  释放，以及阻塞 reader 下 spawn staging gate；测试使用较小预算让溢出与复用路径可确定
+  复现；
 - stdin queue partial write、`EAGAIN`、上限和错误传播；
 - TLB READ 不污染脏集合，C fast/write-miss/cross-page 写保留所有页，并验证当前末页延迟
   到 drain、切页时保留前页；单页同桶碰撞回归证明写入无代码的碰撞页不会删除远端 block
