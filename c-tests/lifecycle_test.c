@@ -59,6 +59,7 @@ enum fake_mode {
     FAKE_OUTPUT_ALLOCATION_FAILURE,
     FAKE_SPAWN_ARGUMENT_BOUND,
     FAKE_WRITER_LOCK_HOLD,
+    FAKE_WRITER_PRECOMMIT_DEADLINE,
 };
 
 enum malformed_event_kind {
@@ -638,6 +639,11 @@ void ish_embed_test_after_session_control_admission(uint8_t type) {
 }
 
 void ish_embed_test_after_writer_lock(uint8_t type) {
+    if (g_mode == FAKE_WRITER_PRECOMMIT_DEADLINE &&
+        type == ISH_FT_SPAWN) {
+        usleep(150 * 1000);
+        return;
+    }
     if (g_mode != FAKE_WRITER_LOCK_HOLD || type != ISH_FT_RESIZE)
         return;
     pthread_mutex_lock(&g_fake_lock);
@@ -2462,6 +2468,38 @@ static int test_control_streaming_queue_deadline(void) {
     return ok ? 0 : 1;
 }
 
+static int test_control_streaming_precommit_deadline(void) {
+    g_mode = FAKE_WRITER_PRECOMMIT_DEADLINE;
+    ish_embed_instance_t *inst = boot_instance();
+    const char *argv[] = {"/bin/true", NULL};
+    ish_embed_spawn_opts_t opts = {0};
+    opts.argv = argv;
+    opts.timeout_ms = 100;
+    ish_embed_session_t *session = NULL;
+
+    uint64_t start = monotonic_ms();
+    int spawn_rc = ish_embed_spawn(inst, &opts, &session);
+    uint64_t elapsed_ms = monotonic_ms() - start;
+    size_t bytes = 1, frames = 1;
+    ish_embed_test_control_usage(inst, &bytes, &frames);
+    int ok = spawn_rc == ISH_ERR_TIMEOUT && session == NULL &&
+        elapsed_ms >= 100 && elapsed_ms <= 500 &&
+        bytes == 0 && frames == 0;
+    if (!ok) {
+        fprintf(stderr,
+                "streaming precommit deadline: rc=%d session=%p "
+                "elapsed=%llums usage=%zu/%zu\n",
+                spawn_rc, (void *)session,
+                (unsigned long long)elapsed_ms, bytes, frames);
+    }
+
+    if (ish_embed_shutdown(inst, 2000) != ISH_OK) ok = 0;
+    if (ok)
+        fprintf(stderr,
+                "finite streaming SPAWN rejected after precommit expiry: OK\n");
+    return ok ? 0 : 1;
+}
+
 static int test_supervisor_error_status(void) {
     g_mode = FAKE_SUPERVISOR_ERROR;
     ish_embed_instance_t *inst = boot_instance();
@@ -3292,7 +3330,7 @@ int main(int argc, char **argv) {
         return 2;
     }
     if (argc != 2) {
-        fprintf(stderr, "usage: %s boot-timeout|bad-hello-ack|install-failure|bundled-supervisor-digest-mismatch|bundled-supervisor-path-mismatch|custom-supervisor|boot-null-output|stdin-close-order|control-frame-limit|control-critical-close|control-same-session-close|control-exited-same-session-close|signal-close-order|resize-close-order|terminate-close-order|control-critical-oneshot|control-preblocked-oneshot|control-byte-limit|control-byte-reserve|control-spawn-gate|control-oneshot-spawn-lock|control-streaming-spawn-lock|control-finite-streaming|control-finite-streaming-write|control-streaming-queue-deadline|streaming-instance-gate|supervisor-error|close-race|backlog|frame-backlog|backlog-control-pressure|borrow-shutdown|double-shutdown|active-call|broken-control|protocol-fatal|protocol-fatal-control-pressure|malformed-event TYPE|output-allocation-failure|spawn-argument-bound|shutdown-drain|log-backpressure|oneshot-timeout|oneshot-output\n", argv[0]);
+        fprintf(stderr, "usage: %s boot-timeout|bad-hello-ack|install-failure|bundled-supervisor-digest-mismatch|bundled-supervisor-path-mismatch|custom-supervisor|boot-null-output|stdin-close-order|control-frame-limit|control-critical-close|control-same-session-close|control-exited-same-session-close|signal-close-order|resize-close-order|terminate-close-order|control-critical-oneshot|control-preblocked-oneshot|control-byte-limit|control-byte-reserve|control-spawn-gate|control-oneshot-spawn-lock|control-streaming-spawn-lock|control-finite-streaming|control-finite-streaming-write|control-streaming-queue-deadline|control-streaming-precommit-deadline|streaming-instance-gate|supervisor-error|close-race|backlog|frame-backlog|backlog-control-pressure|borrow-shutdown|double-shutdown|active-call|broken-control|protocol-fatal|protocol-fatal-control-pressure|malformed-event TYPE|output-allocation-failure|spawn-argument-bound|shutdown-drain|log-backpressure|oneshot-timeout|oneshot-output\n", argv[0]);
         return 2;
     }
     if (strcmp(argv[1], "boot-timeout") == 0) return test_boot_timeout_cleanup();
@@ -3330,6 +3368,8 @@ int main(int argc, char **argv) {
     if (strcmp(argv[1], "control-finite-streaming") == 0) return test_control_finite_streaming_admission();
     if (strcmp(argv[1], "control-finite-streaming-write") == 0) return test_control_finite_streaming_write_busy();
     if (strcmp(argv[1], "control-streaming-queue-deadline") == 0) return test_control_streaming_queue_deadline();
+    if (strcmp(argv[1], "control-streaming-precommit-deadline") == 0)
+        return test_control_streaming_precommit_deadline();
     if (strcmp(argv[1], "streaming-instance-gate") == 0) return test_streaming_instance_gate_deadline();
     if (strcmp(argv[1], "supervisor-error") == 0) return test_supervisor_error_status();
     if (strcmp(argv[1], "close-race") == 0) return test_close_race();

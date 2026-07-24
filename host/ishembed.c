@@ -549,11 +549,22 @@ static int enqueue_frame(ish_embed_instance_t *inst,
     }
     frame->len = frame_len;
     frame->wait_for_completion = wait_for_completion;
-    frame->accounted = 1;
     ish_proto_pack_hdr(frame->bytes, type, flags, payload_len, sid);
     if (payload_len)
         memcpy(frame->bytes + ISH_PROTO_HDR_SIZE, payload, payload_len);
 
+    /* Allocation and a maximum-sized payload copy can consume the remainder of
+     * a short deadline after the first check. Queue admission is the instant
+     * the frame becomes visible, so reject an expired finite call immediately
+     * before linking it rather than publishing a late SPAWN. */
+    if (deadline_ms != 0 && now_ms() >= deadline_ms) {
+        pthread_cond_destroy(&frame->done_cond);
+        free(frame);
+        pthread_mutex_unlock(&inst->writer_lock);
+        return ISH_ERR_TIMEOUT;
+    }
+
+    frame->accounted = 1;
     inst->writer_accounted_bytes += frame_len;
     inst->writer_accounted_frames++;
     frame->next = NULL;
