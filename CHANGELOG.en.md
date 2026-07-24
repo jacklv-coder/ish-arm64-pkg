@@ -4,7 +4,24 @@
 
 Chinese is the primary changelog and this file is its maintained English mirror.
 
-## v0.4.0-abi.2 (planned Stage1 maintenance prerelease)
+## v0.4.0-abi.3 (planned Stage1 maintenance prerelease)
+
+This is a compatibility maintenance release after `v0.4.0-abi.2`. It remains a
+prerelease and is **not stable v0.4.0**.
+
+- `third_party/ish` advances to `5f7535e`. Every fixed-width guest `uname`
+  field is bounded to the 65-byte Linux ABI width and NUL-terminated, preventing
+  longer host names from triggering `__strcpy_chk` SIGTRAP under the fortified
+  libc used by Xcode 16 / iOS 18.
+- Linux, macOS arm64, and iOS build paths add or reuse regression coverage for
+  bounded truncation, buffer integrity, and a real guest `uname -a`.
+- The public C ABI, wire protocol, and Swift API are unchanged. RootFS remains
+  outside the Release.
+- This version does not implement a native Agent Loop and does not install or
+  run Codex CLI inside the iOS app. Node.js/npm remain independent optional
+  guest packages.
+
+## v0.4.0-abi.2 (published Stage1 maintenance prerelease)
 
 This is a compatibility maintenance release after `v0.4.0-abi.1`. It remains a
 prerelease and is **not stable v0.4.0**.
