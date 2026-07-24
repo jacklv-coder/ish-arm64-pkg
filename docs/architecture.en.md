@@ -275,8 +275,11 @@ compile time. Finite oneshot and streaming-spawn deadlines start at API entry
 and cover the instance gate, spawn gate, and SPAWN admission to the control
 queue. Finite streaming sessions use ordered asynchronous admission for SPAWN,
 stdin close, and terminate so a stalled control writer cannot consume the
-product deadline. Stdin close returns `ISH_ERR_BUSY` rather than waiting behind
-an active stdin write; authoritative `EXITED` still confirms termination.
+product deadline. The session retains SPAWN's native absolute deadline, and
+stdin close reuses it when acquiring the writer gate; expiry returns
+`ISH_ERR_TIMEOUT` without starting a fresh wait. Stdin close returns
+`ISH_ERR_BUSY` rather than waiting behind an active stdin write; authoritative
+`EXITED` still confirms termination.
 
 Stage1 does not deliver new typed Swift statuses or bounded Terminal callback
 delivery. Do not describe native backlog protection as if the Stage2 Swift

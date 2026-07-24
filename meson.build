@@ -215,6 +215,8 @@ test('lifecycle_control_finite_streaming_write', lifecycle_test,
     args: ['control-finite-streaming-write'], timeout: 10)
 test('lifecycle_control_streaming_queue_deadline', lifecycle_test,
     args: ['control-streaming-queue-deadline'], timeout: 10)
+test('lifecycle_control_streaming_stdin_deadline', lifecycle_test,
+    args: ['control-streaming-stdin-deadline'], timeout: 10)
 test('lifecycle_control_streaming_precommit_deadline', lifecycle_test,
     args: ['control-streaming-precommit-deadline'], timeout: 10)
 test('lifecycle_streaming_instance_gate', lifecycle_test,

@@ -98,10 +98,10 @@ meson test -C build-test --print-errorlogs
   测试证明构建内一致性，不证明数字签名或来源认证；
 - shutdown 在 live session/active call 时返回 busy，正常路径 soft-halt 并 join；
 - control queue 的普通/关键 frame/byte 上限、饱和时 close/有限 oneshot 的有界 EOF
-  fallback、有限 streaming 的 instance/staging/queue gate deadline、writer 停滞下的
-  有界 stdin-close/terminate、active write 后返回 busy 的 stdin-close、stop/finish 精确
-  释放，以及阻塞 reader 下 spawn staging gate；测试使用较小预算让溢出与复用路径可确定
-  复现；
+  fallback、有限 streaming 的 instance/staging/queue gate deadline、writer 停滞下
+  stdin-close 复用原始 SPAWN deadline 的回归、有界 stdin-close/terminate、active write
+  后返回 busy 的 stdin-close、stop/finish 精确释放，以及阻塞 reader 下 spawn staging
+  gate；测试使用较小预算让溢出与复用路径可确定复现；
 - stdin queue partial write、`EAGAIN`、上限和错误传播；
 - TLB READ 不污染脏集合，C fast/write-miss/cross-page 写保留所有页，并验证当前末页延迟
   到 drain、切页时保留前页；单页同桶碰撞回归证明写入无代码的碰撞页不会删除远端 block

@@ -12,6 +12,10 @@ Chinese is the primary changelog and this file is its maintained English mirror.
   longer restart the full timeout and admit SPAWN after the product deadline.
   A remainder below 1 ms returns `ISH_ERR_TIMEOUT` instead of passing native
   `0`, which means unbounded.
+- Finite streaming sessions now retain SPAWN's native absolute deadline. Stdin
+  close reuses that deadline for control-queue admission and returns
+  `ISH_ERR_TIMEOUT` when it cannot acquire the writer gate in time, instead of
+  starting a fresh admission wait after SPAWN succeeds.
 
 ## v0.4.0-abi.5 (published Stage1 maintenance prerelease)
 

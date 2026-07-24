@@ -111,9 +111,11 @@ print(String(decoding: result.stdoutData, as: UTF8.self))
 `IshSpawnOptions.timeout` 同时适用于 `runOneshot` 与 streaming `spawn`。有限超时从
 Swift API 入口开始，先扣除 argv/env/cwd/chroot 的封送时间，再覆盖 native SPAWN
 staging gate 和控制队列接纳；有限 streaming session 的 SPAWN、stdin close 与
-terminate 采用保持顺序的有界异步接纳，调用方仍须读取权威 `EXITED` 才能确认终止。
-stdin close 遇到 active stdin write 时返回 `ISH_ERR_BUSY`，不会排在它后面等待。如果
-runtime 无法确认命令已清理，会转入 shutting-down 状态而不是遗留无主 guest 进程。
+terminate 采用保持顺序的有界异步接纳。session 会保留 native SPAWN 的绝对 deadline，
+stdin close 复用同一期限取得 writer gate，过期时返回 `ISH_ERR_TIMEOUT`；调用方仍须
+读取权威 `EXITED` 才能确认终止。stdin close 遇到 active stdin write 时返回
+`ISH_ERR_BUSY`，不会排在它后面等待。如果 runtime 无法确认命令已清理，会转入
+shutting-down 状态而不是遗留无主 guest 进程。
 NaN/正负无穷会在进入 native 前返回 `ISH_ERR_INVALID_ARG (-13)`；封送后剩余不足
 1 ms 时会返回 `ISH_ERR_TIMEOUT (-12)`，不会把 `0` 传给 native 而退化成“无超时”。
 

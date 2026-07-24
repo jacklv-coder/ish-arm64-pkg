@@ -251,7 +251,9 @@ int ish_embed_session_resize(ish_embed_session_t *s,
  * job group. grace_ms is retained for source compatibility and is ignored. */
 int ish_embed_session_terminate(ish_embed_session_t *s, uint32_t grace_ms);
 
-/* Close stdin (EOF). */
+/* Close stdin (EOF). A session created with finite timeout_ms reuses the
+ * original streaming-SPAWN admission deadline; expiry returns ISH_ERR_TIMEOUT
+ * without publishing a late STDIN_CLOSE frame. */
 int ish_embed_session_close_stdin(ish_embed_session_t *s);
 
 /* Close the session and consume its owner reference. If the tracked command is
