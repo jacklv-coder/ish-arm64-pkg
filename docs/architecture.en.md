@@ -271,8 +271,12 @@ EOF. A separate gate serializes spawn measure/build/send/free so multiple
 roughly 1 MiB staging payloads cannot exist concurrently outside the control
 budget. Stop, EOF, and error drains share the same free/accounting path.
 The critical byte reserve must hold at least the smallest lifecycle frame at
-compile time. A finite oneshot deadline starts at API entry and covers both
-waiting for the spawn gate and admitting SPAWN to the control queue.
+compile time. Finite oneshot and streaming-spawn deadlines start at API entry
+and cover the instance gate, spawn gate, and SPAWN admission to the control
+queue. Finite streaming sessions use ordered asynchronous admission for SPAWN,
+stdin close, and terminate so a stalled control writer cannot consume the
+product deadline. Stdin close returns `ISH_ERR_BUSY` rather than waiting behind
+an active stdin write; authoritative `EXITED` still confirms termination.
 
 Stage1 does not deliver new typed Swift statuses or bounded Terminal callback
 delivery. Do not describe native backlog protection as if the Stage2 Swift

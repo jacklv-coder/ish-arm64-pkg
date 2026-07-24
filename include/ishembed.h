@@ -101,7 +101,7 @@ typedef enum {
     ISH_ERR_OOM             = -16,
     ISH_ERR_BROKEN_PIPE     = -17,
     ISH_ERR_OUTPUT_LIMIT    = -18, /* native session backlog ceiling reached */
-    ISH_ERR_BUSY            = -19, /* active sessions prevent shutdown          */
+    ISH_ERR_BUSY            = -19, /* operation cannot proceed while state busy */
     ISH_ERR_SUPERVISOR_INSTALL = -20, /* bundled PID 1 install/verification failed */
     ISH_ERR_CONTROL_LIMIT   = -21, /* host-to-guest control queue ceiling reached */
     ISH_ERR_INTERNAL        = -99,
@@ -140,7 +140,8 @@ typedef struct ish_embed_spawn_opts {
     const char *const *envp;     /* NULL-terminated "K=V" array, NULL = inherit minimal default       */
     int allocate_tty;            /* 1 = guest sees a TTY (rare)                                       */
     int merge_stderr_into_stdout;/* 1 = guest dup2(stdout, stderr); host receives only STDOUT events  */
-    uint32_t timeout_ms;         /* 0 = no timeout (only honored by run_oneshot)                      */
+    uint32_t timeout_ms;         /* 0 = legacy synchronous streaming controls; nonzero also bounds
+                                  * run_oneshot and streaming SPAWN admission                         */
     /* If non-NULL/non-empty, the child chroot()s to this guest path
      * before exec. Useful for VM-style isolation: each VM is a directory
      * tree under e.g. /srv/vms/<name>/ in the shared fakefs. */
@@ -177,10 +178,16 @@ int ish_embed_run_oneshot(ish_embed_instance_t *inst,
 
 void ish_embed_free(void *p);
 
-/* Synchronous control operations return ISH_ERR_CONTROL_LIMIT only when their
- * next frame was not admitted; an ISH_OK result means that complete frame was
- * written to the supervisor pipe. Spawn and return a session handle for
- * streaming I/O. */
+/* Spawn and return a session handle for streaming I/O. With timeout_ms == 0,
+ * SPAWN and later controls retain legacy synchronous delivery: ISH_OK means
+ * the complete frame reached the supervisor pipe. A finite timeout starts at
+ * API entry, includes waiting for the SPAWN staging gate, and returns after
+ * ordered queue admission. That finite session also admits stdin-close and
+ * terminate asynchronously, so a stalled writer cannot consume the product
+ * deadline. If a concurrent stdin write owns the ordering gate, stdin-close
+ * returns ISH_ERR_BUSY instead of waiting behind that write; retry it after
+ * the writer finishes or continue with terminate/close. Read the authoritative
+ * EXITED event before treating termination as complete. */
 int ish_embed_spawn(ish_embed_instance_t *inst,
                     const ish_embed_spawn_opts_t *opts,
                     ish_embed_session_t **out_session);
@@ -217,10 +224,14 @@ int ish_embed_session_read(ish_embed_session_t *s,
 int ish_embed_session_write(ish_embed_session_t *s,
                             const uint8_t *buf, size_t len);
 
-/* Outbound operations on one retained session are synchronized with close. A
- * successful write, signal, resize, terminate, or stdin close is completely
- * ordered before SESSION_CLOSE; calls that overlap close either finish first
- * or fail without reporting a later control frame as delivered. */
+/* Outbound operations on one retained session are synchronized with close.
+ * For legacy zero-timeout sessions, a successful write, signal, resize,
+ * terminate, or stdin close is completely written before SESSION_CLOSE. For a
+ * finite-timeout session, stdin close and terminate are instead completely
+ * admitted in queue order before SESSION_CLOSE; stdin close returns
+ * ISH_ERR_BUSY when an active write prevents immediate ordered admission.
+ * Calls that overlap close either finish first or fail without reporting a
+ * later control frame as admitted. */
 
 /* Send a Unix signal to the tracked command's process group. signum is the
  * standard Linux signal number (SIGINT=2, SIGTERM=15, ...). For a TTY shell,

@@ -207,6 +207,16 @@ test('lifecycle_control_spawn_gate', lifecycle_test,
     args: ['control-spawn-gate'], timeout: 10)
 test('lifecycle_control_oneshot_spawn_lock', lifecycle_test,
     args: ['control-oneshot-spawn-lock'], timeout: 10)
+test('lifecycle_control_streaming_spawn_lock', lifecycle_test,
+    args: ['control-streaming-spawn-lock'], timeout: 10)
+test('lifecycle_control_finite_streaming', lifecycle_test,
+    args: ['control-finite-streaming'], timeout: 10)
+test('lifecycle_control_finite_streaming_write', lifecycle_test,
+    args: ['control-finite-streaming-write'], timeout: 10)
+test('lifecycle_control_streaming_queue_deadline', lifecycle_test,
+    args: ['control-streaming-queue-deadline'], timeout: 10)
+test('lifecycle_streaming_instance_gate', lifecycle_test,
+    args: ['streaming-instance-gate'], timeout: 10)
 test('lifecycle_supervisor_error', lifecycle_test,
     args: ['supervisor-error'], timeout: 5)
 test('lifecycle_close_race', lifecycle_test,
