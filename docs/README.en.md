@@ -14,13 +14,13 @@ primary language; the English mirrors support collaboration and release review.
    authoritative. Stage1 uses exact-match v4 between host and embedded supervisor.
 3. **Swift source and manifest binary**: Stage1 Swift remains v0.3.3-ABI
    compatible and does not call retain/release. The manifest currently pins the
-   public `v0.4.0-abi.4`; the release transaction moves it to the
-   `v0.4.0-abi.5` maintenance binary only after those assets are public and
+   public `v0.4.0-abi.5`; the release transaction moves it to the
+   `v0.4.0-abi.6` maintenance binary only after those assets are public and
    verified.
 4. **RootFS and PocketRoot**: RootFS is an independent asset and PocketRoot is
    the product layer. Neither is completed automatically by a runtime PR or Release.
 
-`v0.4.0-abi.4` and its `v0.4.0-abi.5` maintenance release are native-first
+`v0.4.0-abi.5` and its `v0.4.0-abi.6` maintenance release are native-first
 transition prereleases, not stable v0.4. The complete Swift lifecycle, typed
 statuses, Terminal callback queue, and VT parser changes belong to Stage2.
 
@@ -44,7 +44,7 @@ statuses, Terminal callback queue, and VT parser changes belong to Stage2.
 | [Architecture and lifecycle](architecture.en.md) | How is the runtime implemented? How do ABI 1 and wire v4 differ? |
 | [Testing and acceptance](testing.en.md) | What do native, sanitizer, Swift/iOS 18, documentation, and supply-chain gates prove? |
 | [Troubleshooting](troubleshooting.en.md) | Where should boot, link, protocol, output, shutdown, or release diagnosis start? |
-| [Release transaction](releasing.en.md) | Why does the merged maintenance source still pin `v0.4.0-abi.4`, and when does it become `v0.4.0-abi.5`? |
+| [Release transaction](releasing.en.md) | Why does the merged maintenance source still pin `v0.4.0-abi.5`, and when does it become `v0.4.0-abi.6`? |
 | [Changelog](../CHANGELOG.en.md) | What is Stage1's scope and compatibility boundary? |
 
 ## Architecture on one page
@@ -99,7 +99,7 @@ fixes can still go upstream. See the
   A direct-chain or RET target returns to the dispatcher only when it intersects
   pending dirty code pages; data-only writes may keep chaining.
 - RootFS is outside the package/Release and must not enter Corresponding Source.
-- The current `v0.4.0-abi.5` source change carries no RootFS or prebuilt binary;
+- The current `v0.4.0-abi.6` source change carries no RootFS or prebuilt binary;
   a later release transaction must produce the XCFramework.
 
 ## Authoritative sources

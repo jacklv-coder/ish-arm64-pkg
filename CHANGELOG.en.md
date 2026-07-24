@@ -4,7 +4,10 @@
 
 Chinese is the primary changelog and this file is its maintained English mirror.
 
-## Unreleased
+## v0.4.0-abi.6 (planned Stage1 maintenance prerelease)
+
+This is a compatibility maintenance release after `v0.4.0-abi.5`. It remains a
+prerelease and is **not stable v0.4.0**.
 
 - The Swift wrapper now establishes one absolute deadline at
   `runOneshot`/`spawn` API entry and recomputes the remaining native
@@ -16,6 +19,10 @@ Chinese is the primary changelog and this file is its maintained English mirror.
   close reuses that deadline for control-queue admission and returns
   `ISH_ERR_TIMEOUT` when it cannot acquire the writer gate in time, instead of
   starting a fresh admission wait after SPAWN succeeds.
+- The public C ABI remains 1, wire protocol remains v4, and no public symbol is
+  added. RootFS remains outside the Release. This version does not implement a
+  native Agent Loop or install/run Codex CLI in the iOS app. Node.js/npm remain
+  independent optional guest packages.
 
 ## v0.4.0-abi.5 (published Stage1 maintenance prerelease)
 

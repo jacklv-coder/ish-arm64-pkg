@@ -16,25 +16,25 @@ wire v4, and release supply chain.
 | Native integration | `internal-signal-mask`, `procfs_test`, `ishembed_smoke` | internal SIGUSR1 masks on embedded/guest task threads, fakefs, spawn, procfs, a real guest `uname -a`, and the general command path | RootFS provenance/license is trustworthy; compatibility with a particular user tool |
 | Sanitizers | ASan/UBSan and TSan where applicable | bounds, UAF, undefined behavior, and races on covered paths | every schedule is defect-free |
 | RootFS-free Swift | instance/session gates, shutdown retry, public API smoke | oneshot/session leases prevent old-ABI UAF, failure keeps the handle, old public signatures compile | every C call is cancellable or close is always bounded |
-| Swift manifest real link | `test-swift-ios.sh --manifest-binary` | Stage1 Swift links the current `v0.4.0-abi.4` binary | `v0.4.0-abi.5` fixes are public |
+| Swift manifest real link | `test-swift-ios.sh --manifest-binary` | Stage1 Swift links the current `v0.4.0-abi.5` binary | `v0.4.0-abi.6` fixes are public |
 | Swift local real link | `test-swift-ios.sh --local-binary` | the same Swift links the maintenance XCFramework | GitHub assets are published |
 | XCFramework | `build-ios.sh` plus symbol/final-link checks | device/simulator arm64, minimum iOS 18, required symbols | product app behavior |
 | Docs/scripts | positive/negative docs gates, shell syntax, policy tests | bilingual links, diagnostics, release-notes/version/tag/source policy | documentation equals implementation |
 
 ## Confirm the Stage1 state first
 
-Before `v0.4.0-abi.5` publication, all of these should be true:
+Before `v0.4.0-abi.6` publication, all of these should be true:
 
 - `ISH_EMBED_ABI_VERSION` is 1;
 - `ISH_PROTO_VERSION` is 4;
 - Swift source does not call `ish_embed_session_retain/release`;
-- `Package.swift` still pins the public `v0.4.0-abi.4`;
+- `Package.swift` still pins the public `v0.4.0-abi.5`;
 - the locally built XCFramework exports retain/release and required join/soft-halt symbols;
 - RootFS content is absent from Git diff, XCFramework, source archive, and Release manifest.
 
-Only after publication should “manifest pins `v0.4.0-abi.5`” become the expected
+Only after publication should “manifest pins `v0.4.0-abi.6`” become the expected
 state. Do not apply that expectation to a correct pre-publication tree that
-still references the verified `v0.4.0-abi.4`.
+still references the verified `v0.4.0-abi.5`.
 
 ## Fast metadata and script gates
 
