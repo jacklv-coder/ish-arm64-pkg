@@ -13,15 +13,15 @@ RootFS 安装、产品级命令策略、Swift Concurrency 隔离和界面。项�
 
 ## 当前阶段：Native ABI 过渡
 
-当前默认分支已发布 `v0.4.0-abi.2`，正在准备兼容性维护预发布
-`v0.4.0-abi.3`。它们都属于 **Stage1 native ABI 过渡**，不是稳定 `v0.4.0`，
+当前默认分支已发布 `v0.4.0-abi.3`，正在准备兼容性维护预发布
+`v0.4.0-abi.4`。它们都属于 **Stage1 native ABI 过渡**，不是稳定 `v0.4.0`，
 也不是完整 v0.4 Swift API。请同时区分下面四个版本面：
 
-| 版本面 | 当前 `v0.4.0-abi.2` | 计划中的 `v0.4.0-abi.3` |
+| 版本面 | 当前 `v0.4.0-abi.3` | 计划中的 `v0.4.0-abi.4` |
 | --- | --- | --- |
 | 公开 C ABI | `ISH_EMBED_ABI_VERSION == 1`；兼容性符号已发布 | 仍为 ABI 1，不新增公开符号 |
 | 内部 wire protocol | host 与内嵌 supervisor 精确匹配 v4 | 仍为 v4；它不是公开 C ABI 版本 |
-| `Package.swift` | 固定已公开的 `v0.4.0-abi.2` URL/checksum | 发布事务生成只改 manifest 的 release commit，固定到维护二进制 |
+| `Package.swift` | 固定已公开的 `v0.4.0-abi.3` URL/checksum | 发布事务生成只改 manifest 的 release commit，固定到维护二进制 |
 | Swift 源 | 保持 v0.3.3 ABI 兼容，不调用 retain/release | 保持相同 Swift API 与旧 ABI 用法 |
 
 Stage1 的 native runtime 已加入 session retain/release、可等待 kernel 线程、soft-halt、
@@ -68,13 +68,13 @@ JIT 脏页一致性必须修改模拟器核心，无法只在 outer package 或 
 窄差异拥有独立 PR、CI 和精确 gitlink，PocketRoot 的构建与发布也因此可复现。我们不会在
 本地直接改写别人维护的上游仓库；适合通用化的修复仍可回馈
 [iSH upstream](https://github.com/ish-app/ish)，但在上游接受并发布前由 fork 承担项目门禁。
-当前 `v0.4.0-abi.3` 源码变更不纳入 RootFS，也不提交任何预构建
+当前 `v0.4.0-abi.4` 源码变更不纳入 RootFS，也不提交任何预构建
 XCFramework/guest binary；二进制只能在后续发布事务通过后生成和发布。
 
 ## 安装状态
 
-`v0.4.0-abi.2` 已公开且当前 [`Package.swift`](Package.swift) 固定到它。
-`v0.4.0-abi.3` 发布前，manifest 继续指向这个已验证的资产，不会提前引用 404 URL。
+`v0.4.0-abi.3` 已公开且当前 [`Package.swift`](Package.swift) 固定到它。
+`v0.4.0-abi.4` 发布前，manifest 继续指向这个已验证的资产，不会提前引用 404 URL。
 在 Xcode 的 **File → Add Package Dependencies…** 中使用：
 
 ```text
@@ -84,8 +84,9 @@ https://github.com/jacklv-coder/ish-arm64-pkg
 请选择明确包含 `libIshKernel.xcframework.zip`、对应源码归档，并且 manifest URL/checksum
 与同一标签匹配的版本。业务工程不需要安装 Meson、Zig 或 LLVM。
 
-`v0.4.0-abi.3` 只增加 guest `uname` 固定宽度字段的有界复制修复，不实现原生
-Agent Loop，也不会在 App 内安装 Codex CLI。Node.js/npm 如有需要仍由
+`v0.4.0-abi.4` 只修复嵌入启动线程与 guest task 线程继承的内部 SIGUSR1 屏蔽，
+使 guest signal 能可靠打断阻塞中的宿主 syscall；它不实现原生 Agent Loop，也不会
+在 App 内安装 Codex CLI。Node.js/npm 如有需要仍由
 RootFS/guest 包管理流程选择，不属于 runtime 的强制依赖。
 
 ## Swift 使用方式

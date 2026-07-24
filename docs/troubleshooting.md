@@ -26,7 +26,7 @@ git status --short
 来源、大小和 SHA-256。没有这组信息，后续日志可能来自不同状态。
 
 当前正确组合是：C ABI 1、wire v4、Swift 不调用 retain/release、manifest 指向已公开
-的 `v0.4.0-abi.2`。发布 `v0.4.0-abi.3` 后，只有 manifest URL/checksum 应切到维护资产。
+的 `v0.4.0-abi.3`。发布 `v0.4.0-abi.4` 后，只有 manifest URL/checksum 应切到维护资产。
 
 ## 链接缺少 retain/release 或其他符号
 
@@ -44,20 +44,20 @@ nm -gU path/to/libIshKernel.a | awk '{print $NF}' | sort -u \
   旧 ABI 兼容 Swift，而不是扩大本次维护发布范围。
 - 如果检查的是本地 Stage1 XCFramework 而符号缺失，说明构建用了旧 commit、旧 gitlink
   或缓存；用隔离 build 路径重建。
-- 如果 `v0.4.0-abi.3` 已发布但 manifest 仍是 `v0.4.0-abi.2`，检查 release
+- 如果 `v0.4.0-abi.4` 已发布但 manifest 仍是 `v0.4.0-abi.3`，检查 release
   commit/default branch fast-forward 是否完成；不要手工猜 checksum。
 
 ## Package.swift 看起来“还没更新”
 
-维护 PR 合入到 Release 发布前，manifest 固定 `v0.4.0-abi.2` 是预期状态。发布脚本先
+维护 PR 合入到 Release 发布前，manifest 固定 `v0.4.0-abi.3` 是预期状态。发布脚本先
 从合入 commit 重建/验证资产，再创建只更新 manifest 的 release commit，先公开并校验
 资产，最后 fast-forward 默认分支。这样默认分支不会引用 404 URL。
 
-只有已经确认 `v0.4.0-abi.3` Release 公开后，manifest 仍旧才是异常。此时检查：
+只有已经确认 `v0.4.0-abi.4` Release 公开后，manifest 仍旧才是异常。此时检查：
 
 ```sh
-gh release view v0.4.0-abi.3 --repo jacklv-coder/ish-arm64-pkg
-git ls-remote --tags origin refs/tags/v0.4.0-abi.3
+gh release view v0.4.0-abi.4 --repo jacklv-coder/ish-arm64-pkg
+git ls-remote --tags origin refs/tags/v0.4.0-abi.4
 git fetch origin
 git log --oneline --decorate -5 origin/main
 ```
@@ -82,9 +82,21 @@ git log --oneline --decorate -5 origin/main
 Linux `new_utsname` 65 字节字段宽度的宿主 hostname 触发。
 
 - `v0.4.0-abi.2` 不包含该修复；不要通过缩短 CI runner 名称掩盖问题。
-- 待发布的 `v0.4.0-abi.3` 将所有 guest `uname` 固定宽度字段有界截断并保证 NUL 结尾。
+- `v0.4.0-abi.3` 已将所有 guest `uname` 固定宽度字段有界截断并保证 NUL 结尾。
 - 源码验证可运行 iSH 的 `uname` 单测和 `scripts/run-host-tests.sh --smoke`；发布后还应
   在 Xcode 16 / iOS 18 门禁中确认真实 guest `uname -a` 成功。
+
+## 取消阻塞命令后 guest 仍不退出
+
+症状：向正在 `poll`、`nanosleep` 或其他宿主 syscall 中阻塞的 guest 命令发送 signal
+后，命令仍不退出；取消超时后 runtime 也无法确认清理，或后续命令不能恢复执行。
+
+- `v0.4.0-abi.3` 仍可能继承宿主 App 线程对 SIGUSR1 的屏蔽，使 iSH 内部中断保持
+  pending；不要用更短轮询或 App 级强制关闭掩盖这个问题。
+- 待发布的 `v0.4.0-abi.4` 会在嵌入启动线程和每个 guest task 线程明确解除内部
+  SIGUSR1 屏蔽，使 guest signal 能打断阻塞中的宿主 syscall。
+- 源码验证应运行 iSH 的 `internal-signal-mask` 测试、包级 host/iOS 测试，并在真实
+  RootFS 上确认“取消 → native termination confirmed → 后续命令 → shutdown”完整链路。
 
 若失败来自本地 `scripts/run-host-tests.sh`，先运行
 `scripts/build-rootfs.sh --print-identity`，再运行
