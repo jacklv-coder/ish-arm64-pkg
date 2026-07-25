@@ -206,6 +206,8 @@ scripts/build-rootfs.sh --print-inputs
 scripts/build-rootfs.sh --print-identity
 scripts/build-rootfs.sh --verify-rootfs build/fs
 scripts/build-rootfs.sh --verify-bundle build
+scripts/test-deterministic-rootfs-tar.sh
+scripts/prepare-rootfs-candidate.sh --verify-only
 scripts/run-host-tests.sh --smoke
 ```
 
@@ -214,8 +216,10 @@ requires build-check, build-host, and the RootFS recipe to use the `arm64` guest
 That manifest pins the reviewed Alpine version, architecture, and SHA-256, so a
 clean checkout works while the download is still verified before extraction.
 
-Under a kernel `flock` on a stable regular file, the builder creates a schema-v2
-marker in unique same-volume staging. The recipe covers the listed reviewed
+Under a kernel `flock` on a stable regular file, the builder creates a schema-v3
+marker in unique same-volume staging. The deterministic archiver normalizes
+both tar/gzip layers' owner, order, and timestamps to the fixed
+`SOURCE_DATE_EPOCH`. The recipe covers the listed reviewed
 source and pin inputs, but does
 not guarantee toolchain/libarchive versions; recursive submodule data binds
 gitlink/status records, not uncommitted nested-worktree content. Artifact fields
@@ -246,6 +250,13 @@ malformed SQLite, empty/corrupt/PID-reuse locks, concurrent builders, valid
 runtime mutation, every publish-step fault plus a TERM journal gap, use-phase
 lock contention, lock-FD isolation from a consumer's background process, and
 status aggregation.
+`scripts/test-deterministic-rootfs-tar.sh` proves byte equality and no-replace
+behavior with executable, symlink, hardlink, and deliberately different host
+mtime fixtures. A separate CI job then runs
+`scripts/prepare-rootfs-candidate.sh --verify-only`, performs two real RootFS
+builds with one digest-bound `fakefsify`, and compares the complete tar,
+receipt, identity, SQLite database, and data tree. It deletes the temporary
+RootFS before the job ends and uploads no RootFS bytes.
 
 Host-test and production iOS iSH builds must include
 `-DISH_DISABLE_SKIP_BRK=1` in `c_args`. The runner strictly introspects an old

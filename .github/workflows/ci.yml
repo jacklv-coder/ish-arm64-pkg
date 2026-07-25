@@ -14,6 +14,35 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  rootfs-reproducibility:
+    name: RootFS reproducibility (no artifact upload)
+    runs-on: macos-15
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository and pinned iSH source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Check out pinned iSH source
+        run: |
+          git submodule sync -- third_party/ish
+          git -c 'url.https://github.com/.insteadOf=ssh://git@ssh.github.com:443/' \
+            submodule update --init --checkout -- third_party/ish
+          test "$(git -C third_party/ish rev-parse HEAD)" = \
+            "$(git ls-tree HEAD third_party/ish | awk '{print $3}')"
+
+      - name: Install RootFS build tools
+        run: brew install meson ninja libarchive zig
+
+      - name: Test deterministic archive helper
+        run: scripts/test-deterministic-rootfs-tar.sh
+
+      - name: Build and compare two RootFS candidates
+        run: scripts/prepare-rootfs-candidate.sh --verify-only
+
   test-and-build:
     name: Native, Swift, and iOS 18 integration
     runs-on: macos-15

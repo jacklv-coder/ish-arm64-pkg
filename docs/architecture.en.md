@@ -381,12 +381,16 @@ Release tooling and source policy reject RootFS content in published assets.
 PocketRoot should pin its own RootFS manifest and use same-volume staging,
 layout validation, and atomic replacement.
 
-The repository's host-test builder uses schema-v2
+The repository's host-test builder uses schema-v3
 `build/fs/.ishembed-rootfs-identity`, a data-only file the runner never sources.
-Its recipe prefix covers the builder, supervisor/protocol, iSH
+Its recipe prefix covers the builder, deterministic archiver, fixed
+`SOURCE_DATE_EPOCH`, supervisor/protocol, iSH
 revision/worktree/recursive submodules, fakefsify origin, and Alpine pin. Its
 artifact fields bind the actual fakefsify, AArch64 supervisor, BusyBox, and
 initial meta/data seal.
+The candidate gate reuses one digest-bound host `fakefsify` for two independent
+builds and requires full-archive byte equality. CI uploads no archive; actual
+distribution remains a separate compliance and authorization transaction.
 
 Concurrency uses permanently stable regular lock files plus kernel `flock`.
 File existence is not lock state; owner PID, process-start identity, and random

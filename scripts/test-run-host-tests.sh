@@ -25,15 +25,21 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM HUP
 
-unset ALPINE_VERSION ALPINE_ARCH ALPINE_SHA256 ROOTFS_INPUTS_FILE
+unset \
+    ALPINE_VERSION \
+    ALPINE_ARCH \
+    ALPINE_SHA256 \
+    SOURCE_DATE_EPOCH \
+    ROOTFS_ARCHIVER \
+    ROOTFS_INPUTS_FILE
 
 "$ROOTFS_BUILDER" --print-inputs > "$TEST_ROOT/rootfs-inputs.log"
-grep -q '^ROOTFS_IDENTITY_SCHEMA=2$' "$TEST_ROOT/rootfs-inputs.log" || {
+grep -q '^ROOTFS_IDENTITY_SCHEMA=3$' "$TEST_ROOT/rootfs-inputs.log" || {
     printf 'default RootFS identity schema is missing\n' >&2
     sed -n '1,80p' "$TEST_ROOT/rootfs-inputs.log" >&2
     exit 1
 }
-grep -q '^ROOTFS_RECIPE=alpine-fakefs-ishsv-v2$' \
+grep -q '^ROOTFS_RECIPE=alpine-fakefs-ishsv-v3$' \
     "$TEST_ROOT/rootfs-inputs.log" || {
     printf 'default RootFS recipe identity is missing\n' >&2
     sed -n '1,80p' "$TEST_ROOT/rootfs-inputs.log" >&2
@@ -51,6 +57,7 @@ for recipe_field in \
     SUPERVISOR_MAKEFILE_SHA256 \
     PROTOCOL_HEADER_SHA256 \
     ISHEMBED_HEADER_SHA256 \
+    ROOTFS_ARCHIVER_SHA256 \
     ISH_WORKTREE_SHA256 \
     ISH_SUBMODULES_SHA256 \
     FAKEFSIFY_INPUT_SHA256; do
@@ -62,6 +69,12 @@ for recipe_field in \
         exit 1
     }
 done
+grep -q '^ROOTFS_SOURCE_DATE_EPOCH=1704067200$' \
+    "$TEST_ROOT/rootfs-inputs.log" || {
+    printf 'RootFS deterministic archive epoch is missing\n' >&2
+    sed -n '1,100p' "$TEST_ROOT/rootfs-inputs.log" >&2
+    exit 1
+}
 grep -Eq '^ISH_REVISION=([0-9a-f]{40,64}|unversioned)$' \
     "$TEST_ROOT/rootfs-inputs.log" || {
     printf 'iSH source revision is missing or malformed\n' >&2
@@ -171,11 +184,15 @@ mkdir -p \
     "$RECIPE_REPO/include"
 cp "$ROOTFS_BUILDER" "$RECIPE_REPO/scripts/build-rootfs.sh"
 cp "$ROOTFS_PIN" "$RECIPE_REPO/scripts/alpine-rootfs-pin.sh"
+cp "$PKG_ROOT/scripts/create-deterministic-tar.py" \
+    "$RECIPE_REPO/scripts/create-deterministic-tar.py"
 cp "$PKG_ROOT/supervisor/ishsv.c" "$RECIPE_REPO/supervisor/ishsv.c"
 cp "$PKG_ROOT/supervisor/Makefile" "$RECIPE_REPO/supervisor/Makefile"
 cp "$PKG_ROOT/protocol/proto.h" "$RECIPE_REPO/protocol/proto.h"
 cp "$PKG_ROOT/include/ishembed.h" "$RECIPE_REPO/include/ishembed.h"
-chmod +x "$RECIPE_REPO/scripts/build-rootfs.sh"
+chmod +x \
+    "$RECIPE_REPO/scripts/build-rootfs.sh" \
+    "$RECIPE_REPO/scripts/create-deterministic-tar.py"
 
 recipe_digest() {
     ISH_SRC="${1:-$PKG_ROOT/third_party/ish}" \
@@ -186,6 +203,7 @@ recipe_digest() {
 
 baseline_recipe_digest="$(recipe_digest)"
 for recipe_relative in \
+    scripts/create-deterministic-tar.py \
     supervisor/ishsv.c \
     supervisor/Makefile \
     protocol/proto.h \

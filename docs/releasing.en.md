@@ -135,6 +135,14 @@ uploads it, and source policy rejects likely RootFS content by path, name, magic
 and nested-archive inspection. PocketRoot independently owns RootFS provenance,
 hashing, licensing, and distribution.
 
+`scripts/prepare-rootfs-candidate.sh` is a separate local RootFS double-build
+gate, not part of this XCFramework publication transaction. `--verify-only`
+retains and uploads no artifact; `--output` creates only an
+outside-the-repository local candidate explicitly marked as unapproved for
+distribution. Any RootFS GitHub Release still requires its own version policy,
+complete LICENSE/NOTICE, corresponding source, SBOM, PocketRoot manifest update,
+and explicit owner authorization.
+
 ## Post-publication acceptance
 
 ```sh

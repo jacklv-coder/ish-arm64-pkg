@@ -34,6 +34,7 @@ set -euo pipefail
 # PKG_ROOT is the root of this Swift Package repo (where Package.swift lives).
 PKG_ROOT="$(exec 8>&- 9>&-; cd "$(dirname "$0" 8>&- 9>&-)/.." && pwd)"
 ROOTFS_INPUTS_FILE="${ROOTFS_INPUTS_FILE:-$PKG_ROOT/scripts/alpine-rootfs-pin.sh}"
+ROOTFS_ARCHIVER="${ROOTFS_ARCHIVER:-$PKG_ROOT/scripts/create-deterministic-tar.py}"
 ISH_SRC="${ISH_SRC:-$PKG_ROOT/third_party/ish}"
 alpine_version_override_set="${ALPINE_VERSION+x}"
 alpine_sha256_override_set="${ALPINE_SHA256+x}"
@@ -57,6 +58,7 @@ source "$ROOTFS_INPUTS_FILE"
 ALPINE_VERSION="${ALPINE_VERSION:-${PINNED_ALPINE_VERSION:-}}"
 ALPINE_ARCH="${ALPINE_ARCH:-${PINNED_ALPINE_ARCH:-}}"   # iSH-arm64 expects arm64
 ALPINE_SHA256="${ALPINE_SHA256:-${PINNED_ALPINE_SHA256:-}}"
+ROOTFS_SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-${PINNED_ROOTFS_SOURCE_DATE_EPOCH:-}}"
 
 if [[ ! "$ALPINE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     echo "ERROR: ALPINE_VERSION must use the numeric major.minor.patch form" >&2
@@ -80,6 +82,11 @@ if [[ ! "$ALPINE_SHA256" =~ ^[0-9a-fA-F]{64}$ ]]; then
 fi
 ALPINE_SHA256="$(exec 8>&- 9>&-; printf '%s' "$ALPINE_SHA256" 8>&- 9>&- | \
     tr '[:upper:]' '[:lower:]' 8>&- 9>&-)"
+if [[ ! "$ROOTFS_SOURCE_DATE_EPOCH" =~ ^[0-9]+$ ]] || \
+   (( ROOTFS_SOURCE_DATE_EPOCH > 4294967295 )); then
+    echo "ERROR: SOURCE_DATE_EPOCH must fit the unsigned 32-bit gzip timestamp" >&2
+    exit 64
+fi
 ROOTFS_IDENTITY_NAME=".ishembed-rootfs-identity"
 ISH_GUEST_ARCH="arm64"
 ROOTFS_INPUTS_SHA256="$(exec 8>&- 9>&-; shasum -a 256 "$ROOTFS_INPUTS_FILE" 8>&- 9>&- | \
@@ -88,6 +95,7 @@ ROOTFS_BUILDER_SHA256="$(exec 8>&- 9>&-; shasum -a 256 "$0" 8>&- 9>&- | \
     awk '{print $1}' 8>&- 9>&-)"
 
 required_recipe_inputs=(
+    "$ROOTFS_ARCHIVER"
     "$PKG_ROOT/supervisor/ishsv.c"
     "$PKG_ROOT/supervisor/Makefile"
     "$PKG_ROOT/protocol/proto.h"
@@ -112,6 +120,8 @@ PROTOCOL_HEADER_SHA256="$(exec 8>&- 9>&-; \
     shasum -a 256 "$PKG_ROOT/protocol/proto.h" 8>&- 9>&- | awk '{print $1}' 8>&- 9>&-)"
 ISHEMBED_HEADER_SHA256="$(exec 8>&- 9>&-; \
     shasum -a 256 "$PKG_ROOT/include/ishembed.h" 8>&- 9>&- | awk '{print $1}' 8>&- 9>&-)"
+ROOTFS_ARCHIVER_SHA256="$(exec 8>&- 9>&-; \
+    shasum -a 256 "$ROOTFS_ARCHIVER" 8>&- 9>&- | awk '{print $1}' 8>&- 9>&-)"
 
 # Hash the checked-out files that can feed the bundled fakefsify build. The
 # commit identifies reviewed upstream history; the worktree hash also binds
@@ -205,6 +215,8 @@ ROOTFS_RECIPE_SHA256="$(exec 8>&- 9>&-; {
     printf 'SUPERVISOR_MAKEFILE_SHA256=%s\n' "$SUPERVISOR_MAKEFILE_SHA256"
     printf 'PROTOCOL_HEADER_SHA256=%s\n' "$PROTOCOL_HEADER_SHA256"
     printf 'ISHEMBED_HEADER_SHA256=%s\n' "$ISHEMBED_HEADER_SHA256"
+    printf 'ROOTFS_ARCHIVER_SHA256=%s\n' "$ROOTFS_ARCHIVER_SHA256"
+    printf 'ROOTFS_SOURCE_DATE_EPOCH=%s\n' "$ROOTFS_SOURCE_DATE_EPOCH"
     printf 'ISH_REVISION=%s\n' "$ISH_REVISION"
     printf 'ISH_WORKTREE_SHA256=%s\n' "$ISH_WORKTREE_SHA256"
     printf 'ISH_SUBMODULES_SHA256=%s\n' "$ISH_SUBMODULES_SHA256"
@@ -215,14 +227,16 @@ ROOTFS_RECIPE_SHA256="$(exec 8>&- 9>&-; {
 print_rootfs_recipe_identity() {
     # Fixed, data-only format. Consumers compare these bytes; they must never
     # source this file as shell code. Bump recipe when generated contents change.
-    printf 'ROOTFS_IDENTITY_SCHEMA=2\n'
-    printf 'ROOTFS_RECIPE=alpine-fakefs-ishsv-v2\n'
+    printf 'ROOTFS_IDENTITY_SCHEMA=3\n'
+    printf 'ROOTFS_RECIPE=alpine-fakefs-ishsv-v3\n'
     printf 'ROOTFS_RECIPE_SHA256=%s\n' "$ROOTFS_RECIPE_SHA256"
     printf 'ROOTFS_BUILDER_SHA256=%s\n' "$ROOTFS_BUILDER_SHA256"
     printf 'SUPERVISOR_SOURCE_SHA256=%s\n' "$SUPERVISOR_SOURCE_SHA256"
     printf 'SUPERVISOR_MAKEFILE_SHA256=%s\n' "$SUPERVISOR_MAKEFILE_SHA256"
     printf 'PROTOCOL_HEADER_SHA256=%s\n' "$PROTOCOL_HEADER_SHA256"
     printf 'ISHEMBED_HEADER_SHA256=%s\n' "$ISHEMBED_HEADER_SHA256"
+    printf 'ROOTFS_ARCHIVER_SHA256=%s\n' "$ROOTFS_ARCHIVER_SHA256"
+    printf 'ROOTFS_SOURCE_DATE_EPOCH=%s\n' "$ROOTFS_SOURCE_DATE_EPOCH"
     printf 'ISH_REVISION=%s\n' "$ISH_REVISION"
     printf 'ISH_WORKTREE_SHA256=%s\n' "$ISH_WORKTREE_SHA256"
     printf 'ISH_SUBMODULES_SHA256=%s\n' "$ISH_SUBMODULES_SHA256"
@@ -1404,7 +1418,11 @@ https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_MAJOR}/main
 https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_MAJOR}/community
 APK
 
-tar -C "$WORK" -czf "$MERGED_TGZ" . 8>&- 9>&-
+"$ROOTFS_ARCHIVER" \
+    --source "$WORK" \
+    --arcname . \
+    --output "$MERGED_TGZ" \
+    --mtime "$ROOTFS_SOURCE_DATE_EPOCH" 8>&- 9>&-
 
 echo "==> [4/5] Importing merged RootFS into staged fakefs"
 "$FAKEFSIFY_BIN" "$MERGED_TGZ" "$STAGED_ROOTFS" 8>&- 9>&-
@@ -1461,7 +1479,11 @@ if ! validate_rootfs "$STAGED_ROOTFS" 1; then
 fi
 
 echo "==> [5/5] Packaging tarball + checksums"
-tar -C "$ROOTFS_STAGE" -czf "$STAGED_TARBALL" fs 8>&- 9>&-
+"$ROOTFS_ARCHIVER" \
+    --source "$STAGED_ROOTFS" \
+    --arcname fs \
+    --output "$STAGED_TARBALL" \
+    --mtime "$ROOTFS_SOURCE_DATE_EPOCH" 8>&- 9>&-
 STAGED_TARBALL_SHA256="$(exec 8>&- 9>&-; \
     shasum -a 256 "$STAGED_TARBALL" 8>&- 9>&- | \
     awk '{print $1}' 8>&- 9>&-)"

@@ -294,10 +294,13 @@ RootFS、XCFramework 与 Corresponding Source 是三个独立对象：
 发布脚本和源码策略会拒绝 RootFS 混入发布资产。PocketRoot 应固定它自己的 RootFS
 清单，并使用同卷 staging、布局校验和原子替换。
 
-仓库内的 host-test builder 使用 schema v2
+仓库内的 host-test builder 使用 schema v3
 `build/fs/.ishembed-rootfs-identity`，且 runner 永不 `source` 该数据文件。recipe 前缀覆盖
-builder、supervisor/protocol、iSH revision/工作树/递归子模块、fakefsify 来源与 Alpine pin；
+builder、确定性归档器、固定 `SOURCE_DATE_EPOCH`、supervisor/protocol、iSH
+revision/工作树/递归子模块、fakefsify 来源与 Alpine pin；
 artifact 字段绑定实际 fakefsify、AArch64 supervisor、BusyBox 和初始 meta/data seal。
+候选门禁复用一个摘要绑定的 host `fakefsify` 做两次独立构建，并要求完整归档逐字节一致；
+CI 不上传该归档，实际分发仍是独立合规与授权事务。
 
 并发协调使用永久稳定的普通锁文件及内核 `flock`；文件存在不代表锁被占用，owner 中的
 PID、进程启动身份和随机 token 只用于认证嵌套调用。builder 在唯一同卷 staging 生成
