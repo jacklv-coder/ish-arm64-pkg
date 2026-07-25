@@ -141,7 +141,8 @@ if command -v pkg-config >/dev/null 2>&1 && \
         export PKG_CONFIG_PATH="$LIBARCHIVE_PREFIX/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
     fi
 fi
-meson setup "$WORK_ROOT/ish-host" "$PKG_ROOT/third_party/ish" >/dev/null
+meson setup "$WORK_ROOT/ish-host" "$PKG_ROOT/third_party/ish" \
+    -Dguest_arch=arm64 >/dev/null
 meson compile -C "$WORK_ROOT/ish-host" fakefsify
 FAKEFSIFY="$WORK_ROOT/ish-host/tools/fakefsify"
 [[ -f "$FAKEFSIFY" && -x "$FAKEFSIFY" && ! -L "$FAKEFSIFY" ]] || {

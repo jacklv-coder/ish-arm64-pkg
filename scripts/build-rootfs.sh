@@ -1316,7 +1316,8 @@ else
             export PKG_CONFIG_PATH="$LIBARCHIVE_PREFIX/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
         fi
     fi
-    meson setup --reconfigure "$BUILD_DIR/ish-host" "$ISH_SRC" 8>&- 9>&- >/dev/null
+    meson setup --reconfigure "$BUILD_DIR/ish-host" "$ISH_SRC" \
+        -Dguest_arch="$ISH_GUEST_ARCH" 8>&- 9>&- >/dev/null
     meson compile -C "$BUILD_DIR/ish-host" fakefsify 8>&- 9>&-
     FAKEFSIFY_SOURCE_BIN="$BUILD_DIR/ish-host/tools/fakefsify"
 fi
