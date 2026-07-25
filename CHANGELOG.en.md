@@ -4,6 +4,14 @@
 
 Chinese is the primary changelog and this file is its maintained English mirror.
 
+## Unreleased
+
+- The RootFS builder advances to schema v3 with a deterministic tar/gzip
+  archiver using a fixed `SOURCE_DATE_EPOCH`. A local double-build candidate
+  generator and artifact-free CI equality gate are added. Candidates remain
+  explicitly unapproved for distribution and do not change the XCFramework
+  Release's RootFS exclusion policy.
+
 ## v0.4.0-abi.6 (planned Stage1 maintenance prerelease)
 
 This is a compatibility maintenance release after `v0.4.0-abi.5`. It remains a

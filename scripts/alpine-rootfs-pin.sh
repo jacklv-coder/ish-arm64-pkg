@@ -15,3 +15,6 @@
 PINNED_ALPINE_VERSION="3.19.1"
 PINNED_ALPINE_ARCH="aarch64"
 PINNED_ALPINE_SHA256="7ef5eef3a5b1d198dfb1610cde1ef5b0755ff5d838fb1e5e1b9f42b59214820f"
+# 2024-01-01T00:00:00Z. All generated tar and gzip metadata is normalized to
+# this reviewed epoch so identical inputs produce identical archive bytes.
+PINNED_ROOTFS_SOURCE_DATE_EPOCH="1704067200"

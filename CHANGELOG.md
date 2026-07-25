@@ -4,6 +4,12 @@
 
 本仓库以中文变更日志为主，并同步维护英文镜像。
 
+## 未发布
+
+- RootFS builder 升级到 schema v3，使用固定 `SOURCE_DATE_EPOCH` 的确定性 tar/gzip
+  归档器；新增本地双构建候选生成器和不上传制品的 CI 一致性门禁。候选仍明确标记为
+  未获分发批准，不改变 XCFramework Release 的 RootFS 排除策略。
+
 ## v0.4.0-abi.6（计划中的 Stage1 维护预发布）
 
 这是 `v0.4.0-abi.5` 之后的兼容性维护版本，仍是 prerelease，**不是稳定

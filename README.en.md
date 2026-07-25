@@ -223,6 +223,8 @@ PATH="/opt/homebrew/opt/llvm/bin:/opt/homebrew/opt/lld/bin:$PATH" \
 scripts/build-rootfs.sh --print-inputs
 scripts/build-rootfs.sh --print-identity
 scripts/build-rootfs.sh --verify-bundle build
+scripts/test-deterministic-rootfs-tar.sh
+scripts/prepare-rootfs-candidate.sh --verify-only
 scripts/run-host-tests.sh
 scripts/verify-ios-artifact.sh
 scripts/test-swift-ios.sh --local-binary
@@ -246,16 +248,25 @@ First publication uses no-replace rename; replacement uses atomic exchange so
 `build/fs` stays continuously visible. The receipt publishes last as the
 four-artifact commit point. Catchable signals or intermediate failure roll the
 operations back in reverse; success discards the old generation with staging
-instead of retaining `fs.previous.*`. `--print-identity` emits
-the schema-v2 recipe prefix covering the builder, supervisor, protocol headers,
-iSH revision/worktree/submodules, fakefsify origin, and Alpine pin. The marker
-also binds the actual fakefsify, AArch64 supervisor, BusyBox, and initial
+instead of retaining `fs.previous.*`. Schema v3 normalizes tar/gzip uid, gid,
+owner, order, and timestamps to the pinned `SOURCE_DATE_EPOCH`.
+`--print-identity` emits the recipe prefix covering the builder, deterministic
+archiver, supervisor, protocol headers, iSH revision/worktree/submodules,
+fakefsify origin, and Alpine pin. The marker also binds the actual fakefsify,
+AArch64 supervisor, BusyBox, and initial
 meta/data seal. The runner holds the RootFS lock from validation through the
 final consumer and checks the receipt, recipe, SQLite row types/16-byte
 stats/root, complete meta/data paths, and critical digests while permitting
 valid runtime mutations. The repository no longer provisions or tests Codex
 CLI. Callers may still explicitly install Node.js/npm as ordinary guest
 packages.
+`scripts/prepare-rootfs-candidate.sh --verify-only` performs two independent
+builds with one digest-bound host `fakefsify` and requires byte equality for the
+tar, receipt, identity, SQLite database, and data tree. CI verifies and deletes
+the temporary results without uploading RootFS bytes. Explicit `--output`
+accepts only a new path outside the repository and creates a local candidate
+marked `distributionAuthorized=false`; it neither creates a GitHub Release nor
+clears license, NOTICE, corresponding-source, or owner-approval gates.
 `ROOTFS_RECEIPT` is a lineage/initial-snapshot record: it binds the static
 identity marker and the initial `fs.tar.gz`/`SHA256SUMS` produced at build time.
 After runtime writes mutate `fs`, `--verify-bundle` validates the current tree's
