@@ -6,10 +6,18 @@ Chinese is the primary changelog and this file is its maintained English mirror.
 
 ## Unreleased
 
-- The RootFS builder advances to schema v3 with a deterministic tar/gzip
-  archiver using a fixed `SOURCE_DATE_EPOCH`. A local double-build candidate
-  generator and artifact-free CI equality gate are added. Candidates remain
-  explicitly unapproved for distribution and do not change the XCFramework
+- The RootFS builder advances to schema v4 with a deterministic tar/gzip
+  archiver using a fixed `SOURCE_DATE_EPOCH`, a canonical recursive-submodule
+  identity that excludes local ref descriptions, and stable source provenance
+  instead of a host `fakefsify` binary digest in the RootFS content identity.
+  The candidate generator re-enters with a minimal environment allowlist and a
+  host-architecture-selected trusted tool path, still performs two builds per
+  invocation, and now
+  emits host/tool evidence plus actual linked-library load paths, versions, and
+  available file digests;
+  separate invocations can compare `fs.tar.gz` while environment differences
+  remain in external evidence. CI uploads no artifact, and candidates remain
+  explicitly unapproved for distribution without changing the XCFramework
   Release's RootFS exclusion policy.
 
 ## v0.4.0-abi.6 (planned Stage1 maintenance prerelease)

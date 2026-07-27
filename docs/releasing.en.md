@@ -139,7 +139,9 @@ hashing, licensing, and distribution.
 gate, not part of this XCFramework publication transaction. `--verify-only`
 retains and uploads no artifact; `--output` creates only an
 outside-the-repository local candidate explicitly marked as unapproved for
-distribution. Any RootFS GitHub Release still requires its own version policy,
+distribution, plus a `ROOTFS_BUILD_ENVIRONMENT.json` host/tool/linked-library receipt
+that does not enter the RootFS content identity. Any RootFS GitHub Release
+still requires its own version policy,
 complete LICENSE/NOTICE, corresponding source, SBOM, PocketRoot manifest update,
 and explicit owner authorization.
 

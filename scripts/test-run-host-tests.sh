@@ -34,12 +34,12 @@ unset \
     ROOTFS_INPUTS_FILE
 
 "$ROOTFS_BUILDER" --print-inputs > "$TEST_ROOT/rootfs-inputs.log"
-grep -q '^ROOTFS_IDENTITY_SCHEMA=3$' "$TEST_ROOT/rootfs-inputs.log" || {
+grep -q '^ROOTFS_IDENTITY_SCHEMA=4$' "$TEST_ROOT/rootfs-inputs.log" || {
     printf 'default RootFS identity schema is missing\n' >&2
     sed -n '1,80p' "$TEST_ROOT/rootfs-inputs.log" >&2
     exit 1
 }
-grep -q '^ROOTFS_RECIPE=alpine-fakefs-ishsv-v3$' \
+grep -q '^ROOTFS_RECIPE=alpine-fakefs-ishsv-v4$' \
     "$TEST_ROOT/rootfs-inputs.log" || {
     printf 'default RootFS recipe identity is missing\n' >&2
     sed -n '1,80p' "$TEST_ROOT/rootfs-inputs.log" >&2
@@ -230,6 +230,75 @@ changed_ish_digest="$(recipe_digest "$ISH_FIXTURE")"
     exit 1
 }
 
+PROVENANCE_FAKEFSIFY="$TEST_ROOT/provenance-fakefsify"
+printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > "$PROVENANCE_FAKEFSIFY"
+chmod +x "$PROVENANCE_FAKEFSIFY"
+PROVENANCE_SHA="$(printf '1%.0s' {1..64})"
+FAKEFSIFY_BIN="$PROVENANCE_FAKEFSIFY" \
+FAKEFSIFY_PROVENANCE_SHA256="$PROVENANCE_SHA" \
+FAKEFSIFY_EXPECTED_BINARY_SHA256="$(
+    shasum -a 256 "$PROVENANCE_FAKEFSIFY" | awk '{print $1}'
+)" \
+ISH_SRC="$ISH_FIXTURE" \
+ROOTFS_INPUTS_FILE="$RECIPE_REPO/scripts/alpine-rootfs-pin.sh" \
+    "$RECIPE_REPO/scripts/build-rootfs.sh" --print-identity \
+    > "$TEST_ROOT/provenance-identity.log"
+grep -q '^FAKEFSIFY_ORIGIN=reviewed-source-built-binary-override$' \
+    "$TEST_ROOT/provenance-identity.log" || {
+    printf 'source-built fakefsify override did not record its provenance mode\n' >&2
+    exit 1
+}
+grep -q "^FAKEFSIFY_INPUT_SHA256=$PROVENANCE_SHA$" \
+    "$TEST_ROOT/provenance-identity.log" || {
+    printf 'source-built fakefsify override did not bind stable provenance\n' >&2
+    exit 1
+}
+FIXTURE_SOURCE_SHA="$(
+    ISH_SRC="$ISH_FIXTURE" \
+    ROOTFS_INPUTS_FILE="$RECIPE_REPO/scripts/alpine-rootfs-pin.sh" \
+        "$RECIPE_REPO/scripts/build-rootfs.sh" --print-identity |
+        awk -F= '$1 == "ISH_WORKTREE_SHA256" { print $2 }'
+)"
+FAKEFSIFY_BIN="$PROVENANCE_FAKEFSIFY" \
+FAKEFSIFY_PROVENANCE_SHA256="$FIXTURE_SOURCE_SHA" \
+FAKEFSIFY_EXPECTED_BINARY_SHA256="$(
+    shasum -a 256 "$PROVENANCE_FAKEFSIFY" | awk '{print $1}'
+)" \
+ISH_SRC="$ISH_FIXTURE" \
+ROOTFS_INPUTS_FILE="$RECIPE_REPO/scripts/alpine-rootfs-pin.sh" \
+    "$RECIPE_REPO/scripts/build-rootfs.sh" --print-identity \
+    > "$TEST_ROOT/source-built-identity.log"
+grep -q '^FAKEFSIFY_ORIGIN=bundled-ish-source$' \
+    "$TEST_ROOT/source-built-identity.log" || {
+    printf 'source-built fakefsify changed the direct-source recipe origin\n' >&2
+    exit 1
+}
+set +e
+FAKEFSIFY_PROVENANCE_SHA256="$PROVENANCE_SHA" \
+    "$RECIPE_REPO/scripts/build-rootfs.sh" --print-identity \
+    > "$TEST_ROOT/unpaired-fakefsify-provenance.log" 2>&1
+unpaired_fakefsify_provenance_rc=$?
+set -e
+[[ "$unpaired_fakefsify_provenance_rc" == 64 ]] || {
+    printf 'unpaired fakefsify provenance did not fail with status 64\n' >&2
+    exit 1
+}
+
+set +e
+FAKEFSIFY_BIN="$PROVENANCE_FAKEFSIFY" \
+FAKEFSIFY_PROVENANCE_SHA256="$PROVENANCE_SHA" \
+FAKEFSIFY_EXPECTED_BINARY_SHA256="$(printf '2%.0s' {1..64})" \
+ISH_SRC="$ISH_FIXTURE" \
+ROOTFS_INPUTS_FILE="$RECIPE_REPO/scripts/alpine-rootfs-pin.sh" \
+    "$RECIPE_REPO/scripts/build-rootfs.sh" --print-identity \
+    > "$TEST_ROOT/mismatched-fakefsify-binary.log" 2>&1
+mismatched_fakefsify_binary_rc=$?
+set -e
+[[ "$mismatched_fakefsify_binary_rc" == 0 ]] || {
+    printf 'expected binary digest incorrectly changed the content identity path\n' >&2
+    exit 1
+}
+
 # A byte-perfect recipe marker copied onto an empty fakefs must not be enough
 # to pass reuse admission. The verifier requires a valid SQLite/path layout and
 # content-bound artifact fields in addition to the marker prefix.
@@ -239,7 +308,6 @@ mkdir -p "$FORGED_ROOTFS/data"
 "$ROOTFS_BUILDER" --print-identity \
     > "$FORGED_ROOTFS/.ishembed-rootfs-identity"
 for artifact_field in \
-    FAKEFSIFY_BINARY_SHA256 \
     SUPERVISOR_BINARY_SHA256 \
     BUSYBOX_BINARY_SHA256 \
     ROOTFS_INITIAL_META_SHA256 \
@@ -945,6 +1013,8 @@ run_atomic_builder() {
         BUILD_DIR="$ATOMIC_BUILD" \
         ISH_SRC="$PKG_ROOT/third_party/ish" \
         FAKEFSIFY_BIN="$ATOMIC_FAKEFSIFY" \
+        FAKEFSIFY_PROVENANCE_SHA256="${FAKEFSIFY_PROVENANCE_OVERRIDE:-}" \
+        FAKEFSIFY_EXPECTED_BINARY_SHA256="${FAKEFSIFY_EXPECTED_BINARY_OVERRIDE:-}" \
         FAKEFSIFY_COUNT="$ATOMIC_COUNT" \
         FAKEFSIFY_DELAY="${FAKEFSIFY_DELAY_OVERRIDE:-1}" \
         ROOTFS_REUSE_VALID="${ROOTFS_REUSE_VALID_OVERRIDE:-1}" \
@@ -1019,6 +1089,23 @@ atomic_bundle_snapshot() {
         "$(shasum -a 256 "$ATOMIC_BUILD/fs.tar.gz" | awk '{print $1}')" \
         "$(shasum -a 256 "$ATOMIC_BUILD/SHA256SUMS" | awk '{print $1}')" \
         "$(shasum -a 256 "$ATOMIC_BUILD/ROOTFS_RECEIPT" | awk '{print $1}')"
+}
+
+set +e
+FAKEFSIFY_PROVENANCE_OVERRIDE="$(printf '1%.0s' {1..64})" \
+FAKEFSIFY_EXPECTED_BINARY_OVERRIDE="$(printf '2%.0s' {1..64})" \
+FAKEFSIFY_DELAY_OVERRIDE=0 \
+    run_atomic_builder > "$ATOMIC_ROOT/mismatched-fakefsify-binary.log" 2>&1
+mismatched_fakefsify_binary_rc=$?
+set -e
+[[ "$mismatched_fakefsify_binary_rc" == 74 ]] || {
+    printf 'mismatched source-built fakefsify digest did not fail with status 74\n' >&2
+    sed -n '1,160p' "$ATOMIC_ROOT/mismatched-fakefsify-binary.log" >&2
+    exit 1
+}
+[[ ! -e "$ATOMIC_BUILD/fs" && ! -e "$ATOMIC_BUILD/ROOTFS_RECEIPT" ]] || {
+    printf 'mismatched source-built fakefsify published a RootFS generation\n' >&2
+    exit 1
 }
 
 run_atomic_builder > "$ATOMIC_ROOT/build-one.log" 2>&1 &

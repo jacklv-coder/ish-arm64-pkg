@@ -35,13 +35,70 @@ jobs:
             "$(git ls-tree HEAD third_party/ish | awk '{print $3}')"
 
       - name: Install RootFS build tools
-        run: brew install meson ninja libarchive zig
+        run: brew install meson ninja pkgconf libarchive zig
 
       - name: Test deterministic archive helper
         run: scripts/test-deterministic-rootfs-tar.sh
 
       - name: Build and compare two RootFS candidates
-        run: scripts/prepare-rootfs-candidate.sh --verify-only
+        env:
+          # The candidate entry point must ignore ambient compiler selection so
+          # its receipt always describes the toolchain that performed the build.
+          CC: /usr/bin/false
+          ZIG: /usr/bin/false
+          TARGET_TRIPLE: invalid-ambient-target
+          MAKEFLAGS: CC=/usr/bin/false ZIG=/usr/bin/false
+          PKG_CONFIG_PATH: /nonexistent/ambient-pkgconfig
+          PKG_CONFIG_LIBDIR: /nonexistent/ambient-pkgconfig
+          PKG_CONFIG: /usr/bin/false
+          TAR_OPTIONS: "--exclude=*"
+          LD_LIBRARY_PATH: /nonexistent/ambient-loader
+          # A forged handoff sentinel must not skip the complete environment
+          # validation or cause the caller's lookalike HOME to be removed.
+          ISHEMBED_ROOTFS_CANDIDATE_SANITIZED: "1"
+          ISHEMBED_ROOTFS_CANDIDATE_CLEAN_HOME: ${{ runner.temp }}/ishembed-rootfs-candidate-home.ABC123
+          HOME: ${{ runner.temp }}/ishembed-rootfs-candidate-home.ABC123
+          AMBIENT_BYPASS_PROBE: must-be-removed
+        run: |
+          forged_empty_home="$RUNNER_TEMP/ishembed-rootfs-candidate-home.ZZZ999"
+          mkdir -p "$forged_empty_home"
+          mkdir -p "$HOME"
+          touch "$HOME/.gitconfig"
+          ambient_bin="$RUNNER_TEMP/ambient-path-probe"
+          mkdir -p "$ambient_bin"
+          for tool in mktemp chmod rm shasum; do
+            cat > "$ambient_bin/$tool" <<'AMBIENT_TOOL'
+          #!/bin/sh
+          : > "${AMBIENT_TOOL_CALLED:?}"
+          exit 97
+          AMBIENT_TOOL
+            chmod +x "$ambient_bin/$tool"
+          done
+          export AMBIENT_TOOL_CALLED="$RUNNER_TEMP/ambient-tool-called"
+          export PATH="$ambient_bin:$PATH"
+          scripts/prepare-rootfs-candidate.sh --help
+          test -f "$HOME/.gitconfig"
+          test ! -e "$AMBIENT_TOOL_CALLED"
+          /bin/rm -f "$HOME/.gitconfig"
+          rmdir "$HOME"
+
+          # Run the real double build through an otherwise valid forged handoff.
+          # The sanitized child may use this empty HOME, but must never delete it.
+          /usr/bin/env -i \
+            HOME="$forged_empty_home" \
+            PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+            TMPDIR="$RUNNER_TEMP" \
+            LC_ALL=C LANG=C TZ=UTC \
+            COPYFILE_DISABLE=1 GIT_CONFIG_NOSYSTEM=1 \
+            PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 PYTHONNOUSERSITE=1 \
+            HTTP_PROXY= HTTPS_PROXY= ALL_PROXY= NO_PROXY= \
+            http_proxy= https_proxy= all_proxy= no_proxy= \
+            SSL_CERT_FILE= SSL_CERT_DIR= \
+            ISHEMBED_ROOTFS_CANDIDATE_SANITIZED=1 \
+            ISHEMBED_ROOTFS_CANDIDATE_CLEAN_HOME="$forged_empty_home" \
+            /bin/bash scripts/prepare-rootfs-candidate.sh --verify-only
+          test -d "$forged_empty_home"
+          /bin/rm -rf "$forged_empty_home"
 
   test-and-build:
     name: Native, Swift, and iOS 18 integration

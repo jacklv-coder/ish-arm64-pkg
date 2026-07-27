@@ -182,12 +182,14 @@ runner 会明确把 `scripts/alpine-rootfs-pin.sh` 传给 builder，并要求 bu
 与 RootFS recipe 的 guest 架构都是 `arm64`。该清单固定经审阅的 Alpine 版本、架构和
 SHA-256，因此干净检出可直接运行，同时仍在解包前强制校验下载内容。
 
-builder 在稳定普通文件的内核 `flock` 内，以唯一同卷 staging 生成 schema v3 marker；
+builder 在稳定普通文件的内核 `flock` 内，以唯一同卷 staging 生成 schema v4 marker；
 确定性归档器将两层 tar/gzip 的 owner、顺序和时间归一到固定
 `SOURCE_DATE_EPOCH`。recipe 覆盖列出的、经过审阅的
-源码与 pin 输入，但不保证 toolchain/libarchive 版本，递归子模块记录也只绑定
-gitlink/status，不声称哈希未提交的嵌套工作树内容。artifact 字段另外绑定实际
-fakefsify、supervisor、BusyBox 与初始 meta/data seal。发布前执行完整 seal 验证；复用时执行
+源码与 pin 输入；递归子模块摘要只保留规范化 status/object/path，不包含会随本地
+fetch 改变的 ref 描述，也不声称哈希未提交的嵌套工作树内容。artifact 字段另外绑定
+supervisor、BusyBox 与初始 meta/data seal；实际 fakefsify 二进制、host/tool 证据，
+以及链接 library 的加载路径、版本和可获取文件摘要写入候选外部环境 receipt。
+发布前执行完整 seal 验证；复用时执行
 四件套 receipt、SQLite quick-check、正整数 inode、16-byte stat BLOB、唯一空 root、meta/data
 全路径一致性及 AArch64 supervisor/BusyBox 摘要验证。`fs`、tar、checksums 先发布，receipt
 最后提交；替换使用 exchange 保持 fs 可见，失败逆序回滚，成功不保留旧代际。runner 从
@@ -206,9 +208,11 @@ receipt 只表示 lineage/初始快照：它绑定静态 marker 与初始 `fs.ta
 锁竞争、consumer 后台进程的锁 FD 隔离和状态聚合。
 `scripts/test-deterministic-rootfs-tar.sh` 用不同宿主 mtime 的目录、可执行文件、symlink
 和 hardlink 验证归档字节一致与 no-replace。独立 CI job 再调用
-`scripts/prepare-rootfs-candidate.sh --verify-only`，以一个摘要绑定的 `fakefsify` 完成两次
-真实 RootFS 构建并比较完整 tar、receipt、identity、SQLite 和 data；临时 RootFS 在 job
-结束前删除且不上传。
+`scripts/prepare-rootfs-candidate.sh --verify-only`，以一个已记录摘要的 `fakefsify`
+在按 host 架构固定的可信工具目录下完成两次真实 RootFS 构建，并比较完整 tar、receipt、
+identity、SQLite 和 data；另生成
+`ROOTFS_BUILD_ENVIRONMENT.json` 记录 host/tool/链接 library 证据。临时 RootFS 和环境 receipt
+在 job 结束前删除且不上传；两个显式 `--output` 调用可再比较相同 `fs.tar.gz`。
 
 host-test 与 production iOS 构建都必须在 iSH `c_args` 中包含
 `-DISH_DISABLE_SKIP_BRK=1`。runner 对旧 `build-check` 做 Meson introspection；缺少该宏会以

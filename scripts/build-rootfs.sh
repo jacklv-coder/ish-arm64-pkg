@@ -183,15 +183,61 @@ if [[ ! "$ISH_WORKTREE_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
     echo "ERROR: could not fingerprint iSH source tree: $ISH_SRC" >&2
     exit 64
 fi
-ISH_SUBMODULES_SHA256="$(
-    exec 8>&- 9>&-
-    { git -C "$ISH_SRC" submodule status --recursive 8>&- 9>&- 2>/dev/null || true; } \
-        8>&- 9>&- | shasum -a 256 8>&- 9>&- | awk '{print $1}' 8>&- 9>&-
+ISH_SUBMODULES_SHA256="$(exec 8>&- 9>&-; python3 - "$ISH_SRC" 8>&- 9>&- <<'PY'
+import hashlib
+import re
+import subprocess
+import sys
+
+root = sys.argv[1]
+try:
+    raw = subprocess.check_output(
+        ["git", "-C", root, "submodule", "status", "--recursive"],
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+except (OSError, subprocess.CalledProcessError):
+    raw = ""
+
+# `git submodule status` appends a human-readable ref description such as
+# `(heads/main)` when one is available locally. That annotation depends on
+# fetched refs and made otherwise identical clean checkouts produce different
+# RootFS identities. Bind only the semantic status, checked-out object, and
+# path, sorted by path.
+records = []
+for line in raw.splitlines():
+    match = re.fullmatch(
+        r"(?P<state>[ +\-U])(?P<object>[0-9a-fA-F]{40,64}) "
+        r"(?P<path>\S+)(?: .*)?",
+        line,
+    )
+    if not match:
+        raise SystemExit("malformed recursive submodule status")
+    records.append(
+        (
+            match.group("path").encode("utf-8"),
+            match.group("state").encode("ascii"),
+            match.group("object").lower().encode("ascii"),
+        )
+    )
+
+digest = hashlib.sha256()
+for path, state, object_name in sorted(records):
+    digest.update(state)
+    digest.update(b"\0")
+    digest.update(object_name)
+    digest.update(b"\0")
+    digest.update(path)
+    digest.update(b"\n")
+print(digest.hexdigest())
+PY
 )"
 
 FAKEFSIFY_ORIGIN="bundled-ish-source"
 FAKEFSIFY_INPUT_SHA256="$ISH_WORKTREE_SHA256"
 FAKEFSIFY_OVERRIDE="${FAKEFSIFY_BIN:-}"
+FAKEFSIFY_PROVENANCE_OVERRIDE="${FAKEFSIFY_PROVENANCE_SHA256:-}"
+FAKEFSIFY_EXPECTED_BINARY_OVERRIDE="${FAKEFSIFY_EXPECTED_BINARY_SHA256:-}"
 if [[ -n "$FAKEFSIFY_OVERRIDE" ]]; then
     FAKEFSIFY_OVERRIDE="$(exec 8>&- 9>&-; \
         python3 - "$FAKEFSIFY_OVERRIDE" 8>&- 9>&- <<'PY'
@@ -204,9 +250,43 @@ PY
         echo "ERROR: FAKEFSIFY_BIN is not an executable regular file: $FAKEFSIFY_OVERRIDE" >&2
         exit 64
     fi
-    FAKEFSIFY_ORIGIN="reviewed-binary-override"
-    FAKEFSIFY_INPUT_SHA256="$(exec 8>&- 9>&-; \
-        shasum -a 256 "$FAKEFSIFY_OVERRIDE" 8>&- 9>&- | awk '{print $1}' 8>&- 9>&-)"
+    if [[ -n "$FAKEFSIFY_PROVENANCE_OVERRIDE" ]]; then
+        if [[ ! "$FAKEFSIFY_PROVENANCE_OVERRIDE" =~ ^[0-9a-fA-F]{64}$ ]]; then
+            echo "ERROR: FAKEFSIFY_PROVENANCE_SHA256 must contain exactly 64 hexadecimal characters" >&2
+            exit 64
+        fi
+        FAKEFSIFY_INPUT_SHA256="$(exec 8>&- 9>&-; \
+            printf '%s' "$FAKEFSIFY_PROVENANCE_OVERRIDE" 8>&- 9>&- | \
+            tr '[:upper:]' '[:lower:]' 8>&- 9>&-)"
+        if [[ "$FAKEFSIFY_INPUT_SHA256" == "$ISH_WORKTREE_SHA256" ]]; then
+            # The candidate gate builds one host tool from this exact source
+            # tree and shares it across both generations. Keep the content
+            # recipe identical to a direct source build; the external
+            # environment receipt binds the actual host-tool bytes.
+            FAKEFSIFY_ORIGIN="bundled-ish-source"
+        else
+            FAKEFSIFY_ORIGIN="reviewed-source-built-binary-override"
+        fi
+        if [[ ! "$FAKEFSIFY_EXPECTED_BINARY_OVERRIDE" =~ ^[0-9a-fA-F]{64}$ ]]; then
+            echo "ERROR: source-provenance fakefsify requires FAKEFSIFY_EXPECTED_BINARY_SHA256" >&2
+            exit 64
+        fi
+        FAKEFSIFY_EXPECTED_BINARY_OVERRIDE="$(exec 8>&- 9>&-; \
+            printf '%s' "$FAKEFSIFY_EXPECTED_BINARY_OVERRIDE" 8>&- 9>&- | \
+            tr '[:upper:]' '[:lower:]' 8>&- 9>&-)"
+    else
+        if [[ -n "$FAKEFSIFY_EXPECTED_BINARY_OVERRIDE" ]]; then
+            echo "ERROR: FAKEFSIFY_EXPECTED_BINARY_SHA256 requires source provenance" >&2
+            exit 64
+        fi
+        FAKEFSIFY_ORIGIN="reviewed-binary-override"
+        FAKEFSIFY_INPUT_SHA256="$(exec 8>&- 9>&-; \
+            shasum -a 256 "$FAKEFSIFY_OVERRIDE" 8>&- 9>&- | awk '{print $1}' 8>&- 9>&-)"
+    fi
+elif [[ -n "$FAKEFSIFY_PROVENANCE_OVERRIDE" ||
+        -n "$FAKEFSIFY_EXPECTED_BINARY_OVERRIDE" ]]; then
+    echo "ERROR: fakefsify provenance and expected binary digest require FAKEFSIFY_BIN" >&2
+    exit 64
 fi
 
 ROOTFS_RECIPE_SHA256="$(exec 8>&- 9>&-; {
@@ -227,8 +307,8 @@ ROOTFS_RECIPE_SHA256="$(exec 8>&- 9>&-; {
 print_rootfs_recipe_identity() {
     # Fixed, data-only format. Consumers compare these bytes; they must never
     # source this file as shell code. Bump recipe when generated contents change.
-    printf 'ROOTFS_IDENTITY_SCHEMA=3\n'
-    printf 'ROOTFS_RECIPE=alpine-fakefs-ishsv-v3\n'
+    printf 'ROOTFS_IDENTITY_SCHEMA=4\n'
+    printf 'ROOTFS_RECIPE=alpine-fakefs-ishsv-v4\n'
     printf 'ROOTFS_RECIPE_SHA256=%s\n' "$ROOTFS_RECIPE_SHA256"
     printf 'ROOTFS_BUILDER_SHA256=%s\n' "$ROOTFS_BUILDER_SHA256"
     printf 'SUPERVISOR_SOURCE_SHA256=%s\n' "$SUPERVISOR_SOURCE_SHA256"
@@ -519,7 +599,7 @@ validate_rootfs() {
     local require_initial_content="${2:-0}"
     local identity_path="$rootfs_path/$ROOTFS_IDENTITY_NAME"
     local expected_recipe expected_lines total_lines
-    local fakefsify_sha supervisor_sha busybox_sha initial_meta_sha initial_data_sha initial_content_sha
+    local supervisor_sha busybox_sha initial_meta_sha initial_data_sha initial_content_sha
     local actual_sha
 
     if [[ ! -d "$rootfs_path" || -L "$rootfs_path" ]]; then
@@ -540,18 +620,17 @@ validate_rootfs() {
     fi
     total_lines="$(exec 8>&- 9>&-; wc -l 8>&- 9>&- < "$identity_path" | \
         tr -d ' ' 8>&- 9>&-)"
-    if (( total_lines != expected_lines + 6 )); then
+    if (( total_lines != expected_lines + 5 )); then
         echo "ERROR: RootFS identity marker has an invalid field set: $identity_path" >&2
         return 1
     fi
 
-    fakefsify_sha="$(exec 8>&- 9>&-; identity_value "$identity_path" FAKEFSIFY_BINARY_SHA256 || true)"
     supervisor_sha="$(exec 8>&- 9>&-; identity_value "$identity_path" SUPERVISOR_BINARY_SHA256 || true)"
     busybox_sha="$(exec 8>&- 9>&-; identity_value "$identity_path" BUSYBOX_BINARY_SHA256 || true)"
     initial_meta_sha="$(exec 8>&- 9>&-; identity_value "$identity_path" ROOTFS_INITIAL_META_SHA256 || true)"
     initial_data_sha="$(exec 8>&- 9>&-; identity_value "$identity_path" ROOTFS_INITIAL_DATA_SHA256 || true)"
     initial_content_sha="$(exec 8>&- 9>&-; identity_value "$identity_path" ROOTFS_INITIAL_CONTENT_SHA256 || true)"
-    for actual_sha in "$fakefsify_sha" "$supervisor_sha" "$busybox_sha" \
+    for actual_sha in "$supervisor_sha" "$busybox_sha" \
         "$initial_meta_sha" "$initial_data_sha" "$initial_content_sha"; do
         if [[ ! "$actual_sha" =~ ^[0-9a-f]{64}$ ]]; then
             echo "ERROR: RootFS identity marker contains a malformed digest: $identity_path" >&2
@@ -1332,7 +1411,9 @@ FAKEFSIFY_BINARY_SHA256="$(exec 8>&- 9>&-; \
     shasum -a 256 "$FAKEFSIFY_BIN" 8>&- 9>&- | \
     awk '{print $1}' 8>&- 9>&-)"
 if [[ "$FAKEFSIFY_ORIGIN" == "reviewed-binary-override" && \
-      "$FAKEFSIFY_BINARY_SHA256" != "$FAKEFSIFY_INPUT_SHA256" ]]; then
+      "$FAKEFSIFY_BINARY_SHA256" != "$FAKEFSIFY_INPUT_SHA256" ]] || \
+   [[ -n "$FAKEFSIFY_EXPECTED_BINARY_OVERRIDE" && \
+      "$FAKEFSIFY_BINARY_SHA256" != "$FAKEFSIFY_EXPECTED_BINARY_OVERRIDE" ]]; then
     echo "ERROR: FAKEFSIFY_BIN changed after its recipe identity was computed" >&2
     exit 74
 fi
@@ -1433,6 +1514,8 @@ CURRENT_ROOTFS_RECIPE_IDENTITY="$(
     ROOTFS_INPUTS_FILE="$ROOTFS_INPUTS_FILE" \
     ISH_SRC="$ISH_SRC" \
     FAKEFSIFY_BIN="$FAKEFSIFY_OVERRIDE" \
+    FAKEFSIFY_PROVENANCE_SHA256="$FAKEFSIFY_PROVENANCE_OVERRIDE" \
+    FAKEFSIFY_EXPECTED_BINARY_SHA256="$FAKEFSIFY_EXPECTED_BINARY_OVERRIDE" \
     ALPINE_VERSION="$ALPINE_VERSION" \
     ALPINE_ARCH="$ALPINE_ARCH" \
     ALPINE_SHA256="$ALPINE_SHA256" \
@@ -1464,7 +1547,6 @@ ROOTFS_IDENTITY_TMP="$(exec 8>&- 9>&-; \
     mktemp "$STAGED_ROOTFS/${ROOTFS_IDENTITY_NAME}.tmp.XXXXXX" 8>&- 9>&-)"
 {
     print_rootfs_recipe_identity
-    printf 'FAKEFSIFY_BINARY_SHA256=%s\n' "$FAKEFSIFY_BINARY_SHA256"
     printf 'SUPERVISOR_BINARY_SHA256=%s\n' "$SUPERVISOR_BINARY_SHA256"
     printf 'BUSYBOX_BINARY_SHA256=%s\n' "$BUSYBOX_BINARY_SHA256"
     printf 'ROOTFS_INITIAL_META_SHA256=%s\n' "$ROOTFS_INITIAL_META_SHA256"

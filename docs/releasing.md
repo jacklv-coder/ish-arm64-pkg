@@ -117,7 +117,9 @@ RootFS 既不是 binary，也不是 Corresponding Source。脚本不会读取或
 
 `scripts/prepare-rootfs-candidate.sh` 是独立的本地 RootFS 双构建门禁，不属于本
 XCFramework 发布事务。`--verify-only` 不保留或上传制品；`--output` 只生成明确标记为
-未获分发批准的仓库外本地候选。任何 RootFS GitHub Release 仍需单独版本策略、完整
+未获分发批准的仓库外本地候选，并附带不进入 RootFS 内容身份的
+`ROOTFS_BUILD_ENVIRONMENT.json` host/tool/链接 library receipt。任何 RootFS GitHub Release
+仍需单独版本策略、完整
 LICENSE/NOTICE、对应源码、SBOM、PocketRoot manifest 更新和负责人明确授权。
 
 ## 发布后验收

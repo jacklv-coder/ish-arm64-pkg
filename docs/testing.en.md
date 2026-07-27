@@ -216,15 +216,17 @@ requires build-check, build-host, and the RootFS recipe to use the `arm64` guest
 That manifest pins the reviewed Alpine version, architecture, and SHA-256, so a
 clean checkout works while the download is still verified before extraction.
 
-Under a kernel `flock` on a stable regular file, the builder creates a schema-v3
+Under a kernel `flock` on a stable regular file, the builder creates a schema-v4
 marker in unique same-volume staging. The deterministic archiver normalizes
 both tar/gzip layers' owner, order, and timestamps to the fixed
-`SOURCE_DATE_EPOCH`. The recipe covers the listed reviewed
-source and pin inputs, but does
-not guarantee toolchain/libarchive versions; recursive submodule data binds
-gitlink/status records, not uncommitted nested-worktree content. Artifact fields
-separately bind the actual fakefsify, supervisor, BusyBox, and initial meta/data
-seal. Publication requires the full
+`SOURCE_DATE_EPOCH`. The recipe covers the listed reviewed source and pin
+inputs. Recursive submodule data retains only canonical status/object/path
+records, excluding local ref descriptions that change after fetch; it does not
+cover uncommitted nested-worktree content. Artifact fields separately bind the
+supervisor, BusyBox, and initial meta/data seal. The actual fakefsify binary,
+host/tool evidence, and linked-library load paths, versions, and available
+file digests are recorded in the
+candidate's external build-environment receipt. Publication requires the full
 seal. Reuse checks the four-artifact receipt, SQLite quick-check, positive
 inodes, 16-byte stat BLOBs, exactly one empty root, complete meta/data paths,
 and AArch64 supervisor/BusyBox digests. `fs`, tar, and checksums publish before
@@ -254,9 +256,13 @@ status aggregation.
 behavior with executable, symlink, hardlink, and deliberately different host
 mtime fixtures. A separate CI job then runs
 `scripts/prepare-rootfs-candidate.sh --verify-only`, performs two real RootFS
-builds with one digest-bound `fakefsify`, and compares the complete tar,
-receipt, identity, SQLite database, and data tree. It deletes the temporary
-RootFS before the job ends and uploads no RootFS bytes.
+builds with one recorded-digest `fakefsify` under a host-architecture-selected
+trusted tool path, and compares the complete tar, receipt, identity, SQLite
+database, and data tree. It also generates
+`ROOTFS_BUILD_ENVIRONMENT.json` with host/tool/linked-library evidence. The temporary
+RootFS and receipt are deleted before the job ends and no RootFS bytes are
+uploaded; two explicit `--output` invocations can additionally compare the same
+`fs.tar.gz`.
 
 Host-test and production iOS iSH builds must include
 `-DISH_DISABLE_SKIP_BRK=1` in `c_args`. The runner strictly introspects an old
