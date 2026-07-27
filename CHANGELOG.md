@@ -6,9 +6,14 @@
 
 ## 未发布
 
-- RootFS builder 升级到 schema v3，使用固定 `SOURCE_DATE_EPOCH` 的确定性 tar/gzip
-  归档器；新增本地双构建候选生成器和不上传制品的 CI 一致性门禁。候选仍明确标记为
-  未获分发批准，不改变 XCFramework Release 的 RootFS 排除策略。
+- RootFS builder 升级到 schema v4，使用固定 `SOURCE_DATE_EPOCH` 的确定性 tar/gzip
+  归档器、去除本地 ref 描述的规范化递归子模块身份，以及不把 host `fakefsify` 二进制
+  摘要写入 RootFS 内容身份的稳定源码 provenance。候选生成器先以最小环境变量白名单和
+  按 host 架构固定的可信工具目录重新进入，仍在每次调用内双构建，
+  并新增 host/tool 证据，以及实际链接 library 的加载路径、版本和可获取文件摘要；
+  不同调用可直接比较
+  `fs.tar.gz`，环境差异仍保留在外部证据中。CI 不上传制品，候选仍明确标记为未获分发
+  批准，不改变 XCFramework Release 的 RootFS 排除策略。
 
 ## v0.4.0-abi.6（计划中的 Stage1 维护预发布）
 

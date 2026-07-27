@@ -180,7 +180,7 @@ wire v4 要求两端精确匹配，增加 `SESSION_CLOSE`；wire 版本不等于
 ## 维护者构建与验证
 
 ```sh
-brew install meson ninja sqlite libarchive llvm lld zig
+brew install meson ninja pkgconf sqlite libarchive llvm lld zig
 git submodule sync -- third_party/ish
 git submodule update --init --checkout -- third_party/ish
 PATH="/opt/homebrew/opt/llvm/bin:/opt/homebrew/opt/lld/bin:$PATH" \
@@ -208,16 +208,23 @@ builder 在稳定普通锁文件上持有内核 `flock`，并在唯一同卷 sta
 `fs`、`fs.tar.gz`、`SHA256SUMS` 与 `ROOTFS_RECEIPT`。首次发布使用 no-replace rename，
 替换使用原子 exchange 保持 `build/fs` 始终可见；receipt 最后发布，是四件套的提交点。
 任何可捕获信号或中途失败都会逆序回滚，成功后旧代际随 staging 删除，不保留
-`fs.previous.*`。schema v3 将 tar/gzip 的 uid、gid、owner、顺序和时间固定到 pin 中的
+`fs.previous.*`。schema v4 将 tar/gzip 的 uid、gid、owner、顺序和时间固定到 pin 中的
 `SOURCE_DATE_EPOCH`。`--print-identity` 给出 recipe 前缀，覆盖 builder、确定性归档器、
-supervisor、协议头、iSH revision/工作树/子模块、fakefsify 来源和 Alpine pin；marker
-再绑定实际 fakefsify、arm64 supervisor、BusyBox 与初始 meta/data seal。runner 从验证到
+supervisor、协议头、iSH revision/工作树/规范化子模块、fakefsify 源码 provenance 和
+Alpine pin；marker 再绑定 arm64 supervisor、BusyBox 与初始 meta/data seal。每次候选
+调用实际使用的 fakefsify 二进制、host/tool 证据，以及链接 library 的加载路径、版本
+和可获取文件摘要写入外部
+`ROOTFS_BUILD_ENVIRONMENT.json`，不会让本地 ref 描述或 host tool 二进制漂移改变
+RootFS 内容身份。runner 从验证到
 最后一个 consumer 都持有
 RootFS 锁，并验证 receipt、recipe、SQLite 行类型/16-byte stat/root、meta/data 全路径、
 关键摘要；合法运行态写入仍可复用。仓库不再提供或测试 Codex CLI provision；Node.js/npm
 仍可由调用方作为普通 guest package 显式安装。
-`scripts/prepare-rootfs-candidate.sh --verify-only` 使用同一个摘要绑定的 host
-`fakefsify` 独立构建两次，并要求 tar、receipt、identity、SQLite 和 data 逐字节一致。
+`scripts/prepare-rootfs-candidate.sh --verify-only` 会先以最小环境变量白名单和按 host
+架构固定的可信工具目录重新进入，
+再使用同一个已记录摘要的 host
+`fakefsify` 独立构建两次，并要求 tar、receipt、identity、SQLite 和 data 逐字节一致；
+两个独立调用还可以直接比较 `fs.tar.gz`，各自的环境 receipt 则保留工具链差异。
 CI 只执行验证并删除临时结果，不上传 RootFS。显式 `--output` 只允许仓库外的全新路径，
 生成带 `distributionAuthorized=false` 的本地候选；它不会创建 GitHub Release，也不解除
 许可证、NOTICE、对应源码和负责人批准门禁。
