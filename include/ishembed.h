@@ -199,12 +199,12 @@ void ish_embed_free(void *p);
  * SPAWN and later controls retain legacy synchronous delivery: ISH_OK means
  * the complete frame reached the supervisor pipe. A finite timeout starts at
  * API entry, includes waiting for the SPAWN staging gate, and returns after
- * ordered queue admission. That finite session also admits stdin-close and
- * terminate asynchronously, so a stalled writer cannot consume the product
- * deadline. If a concurrent stdin write owns the ordering gate, stdin-close
- * returns ISH_ERR_BUSY instead of waiting behind that write; retry it after
- * the writer finishes or continue with terminate/close. Read the authoritative
- * EXITED event before treating termination as complete. */
+ * ordered queue admission. That finite session also admits stdin writes,
+ * stdin-close, and terminate asynchronously, so a stalled writer cannot
+ * consume the product deadline. If a concurrent stdin write owns the ordering
+ * gate, stdin-close returns ISH_ERR_BUSY instead of waiting behind that write;
+ * retry it after the writer finishes or continue with terminate/close. Read
+ * the authoritative EXITED event before treating termination as complete. */
 int ish_embed_spawn(ish_embed_instance_t *inst,
                     const ish_embed_spawn_opts_t *opts,
                     ish_embed_session_t **out_session);
@@ -235,17 +235,20 @@ int ish_embed_session_read(ish_embed_session_t *s,
  * writes into bounded frames; guest PID 1 maintains a 1 MiB per-session stdin
  * queue and handles partial nonblocking child writes. Queue overflow or a hard
  * child write error is terminal for that session. After close_stdin, writes
- * return ISH_ERR_BROKEN_PIPE. If the bounded host control transport cannot
- * admit the next chunk, the call returns ISH_ERR_CONTROL_LIMIT; earlier chunks
- * from the same call have already been delivered. */
+ * return ISH_ERR_BROKEN_PIPE. A finite-timeout session reuses the original
+ * streaming-SPAWN admission deadline for its stdin lock and every frame
+ * admission, returning ISH_ERR_TIMEOUT rather than waiting past that deadline.
+ * Zero-timeout sessions preserve legacy synchronous pipe-delivery semantics.
+ * If a call fails after admitting an earlier chunk, that prefix remains
+ * ordered for delivery; callers needing transactional input must stage it. */
 int ish_embed_session_write(ish_embed_session_t *s,
                             const uint8_t *buf, size_t len);
 
 /* Outbound operations on one retained session are synchronized with close.
  * For legacy zero-timeout sessions, a successful write, signal, resize,
  * terminate, or stdin close is completely written before SESSION_CLOSE. For a
- * finite-timeout session, stdin close and terminate are instead completely
- * admitted in queue order before SESSION_CLOSE; stdin close returns
+ * finite-timeout session, writes, stdin close, and terminate are instead
+ * completely admitted in queue order before SESSION_CLOSE; stdin close returns
  * ISH_ERR_BUSY when an active write prevents immediate ordered admission.
  * Calls that overlap close either finish first or fail without reporting a
  * later control frame as admitted. */

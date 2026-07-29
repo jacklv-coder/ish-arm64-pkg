@@ -112,10 +112,10 @@ struct ish_embed_session {
     ish_embed_instance_t *inst;
     uint32_t              id;
     /* A finite streaming spawn uses ordered asynchronous control admission.
-     * Preserve its absolute admission deadline so stdin EOF cannot start a
-     * fresh wait after the original product budget expires. Terminate remains
-     * a separately bounded lifecycle operation. Zero-timeout legacy sessions
-     * retain synchronous delivery semantics. */
+     * Preserve its absolute admission deadline so stdin writes/EOF cannot
+     * start a fresh wait after the original product budget expires. Terminate
+     * remains a separately bounded lifecycle operation. Zero-timeout legacy
+     * sessions retain synchronous delivery semantics. */
     uint64_t              streaming_deadline_ms;
     int                   stdin_closed;
     int                   closing;
@@ -1818,7 +1818,14 @@ int ish_embed_session_write(ish_embed_session_t *s,
                             const uint8_t *buf, size_t len) {
     if (!s) return ISH_ERR_INVALID_ARG;
     if (len == 0) return ISH_OK;
-    pthread_mutex_lock(&s->stdin_lock);
+    uint64_t streaming_deadline_ms = s->streaming_deadline_ms;
+    int bounded_streaming_controls = streaming_deadline_ms != 0;
+    if (bounded_streaming_controls) {
+        if (!mutex_lock_until(&s->stdin_lock, streaming_deadline_ms))
+            return ISH_ERR_TIMEOUT;
+    } else {
+        pthread_mutex_lock(&s->stdin_lock);
+    }
     pthread_mutex_lock(&s->lock);
     if (s->closing) {
         pthread_mutex_unlock(&s->lock);
@@ -1836,7 +1843,12 @@ int ish_embed_session_write(ish_embed_session_t *s,
     /* split into 64KiB chunks to keep frames bounded */
     while (len > 0) {
         size_t chunk = len > 65536 ? 65536 : len;
-        int rc = send_frame(inst, ISH_FT_STDIN_DATA, 0, sid, buf, (uint32_t)chunk);
+        int rc = bounded_streaming_controls
+            ? send_frame_async_normal_until(
+                inst, ISH_FT_STDIN_DATA, 0, sid, buf, (uint32_t)chunk,
+                streaming_deadline_ms)
+            : send_frame(
+                inst, ISH_FT_STDIN_DATA, 0, sid, buf, (uint32_t)chunk);
         if (rc != 0) {
             pthread_mutex_unlock(&s->stdin_lock);
             return rc;

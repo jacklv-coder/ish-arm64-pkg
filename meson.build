@@ -213,6 +213,8 @@ test('lifecycle_control_finite_streaming', lifecycle_test,
     args: ['control-finite-streaming'], timeout: 10)
 test('lifecycle_control_finite_streaming_write', lifecycle_test,
     args: ['control-finite-streaming-write'], timeout: 10)
+test('lifecycle_control_streaming_write_deadline', lifecycle_test,
+    args: ['control-streaming-write-deadline'], timeout: 10)
 test('lifecycle_control_streaming_queue_deadline', lifecycle_test,
     args: ['control-streaming-queue-deadline'], timeout: 10)
 test('lifecycle_control_streaming_stdin_deadline', lifecycle_test,

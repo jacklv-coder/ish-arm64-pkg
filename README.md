@@ -40,7 +40,8 @@ RootFS 不提交到本仓库、不包含在 XCFramework 或 GitHub Release 中�
 
 - 每个宿主进程只支持一个有效的 `IshInstance` 生命周期，可并发运行多个 command session。
 - 支持一次性命令与流式 session；流式 session 可读写标准流、关闭 stdin、发送信号、
-  调整 PTY 尺寸并等待退出。
+  调整 PTY 尺寸并等待退出。有限 timeout session 的 stdin write/close 复用 SPAWN 的
+  绝对 admission deadline；多帧 write 失败时可能已经接纳前缀，事务型输入必须 staging。
 - `/srv/vms/<name>` 下的目录树可作为持久化 chroot。它隔离文件视图，但不是硬件虚拟机，
   也不是针对恶意代码的安全边界。
 - native reader 对协议帧和每个 session 的输出积压设置硬上限；host→guest 控制队列也有

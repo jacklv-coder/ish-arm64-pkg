@@ -110,7 +110,7 @@ Important coverage includes:
 - ordinary/critical control-queue frame/byte ceilings, bounded EOF fallback for
   close and finite oneshot under saturation, finite streaming instance/staging/
   queue-gate deadlines, deterministic reuse of the original SPAWN deadline by
-  stdin close behind a stalled writer, bounded stdin-close/terminate, busy
+  stdin write/close behind a stalled writer, bounded stdin-close/terminate, busy
   stdin-close behind an active write, exact stop/finish release, and the spawn
   staging gate with a blocked reader; smaller test budgets make overflow and
   reuse deterministic;

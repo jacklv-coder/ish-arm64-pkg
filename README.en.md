@@ -48,7 +48,9 @@ size, SHA-256, licenses, and installation transaction.
 - One valid `IshInstance` lifecycle is supported per host process, with multiple
   concurrent command sessions.
 - One-shot and streaming commands support standard I/O, stdin close, signals,
-  PTY resize, and exit events.
+  PTY resize, and exit events. Finite-timeout sessions reuse the SPAWN absolute
+  admission deadline for stdin write/close; a failed multi-frame write may have
+  admitted a prefix, so transactional input must be staged.
 - Persistent trees below `/srv/vms/<name>` can be used as chroots. This isolates
   filesystem views; it is not hardware virtualization or an adversarial sandbox.
 - The native reader has hard frame and per-session backlog ceilings. The

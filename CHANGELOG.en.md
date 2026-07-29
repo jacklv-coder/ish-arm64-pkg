@@ -6,6 +6,12 @@ Chinese is the primary changelog and this file is its maintained English mirror.
 
 ## Unreleased
 
+- Finite-timeout streaming sessions now reuse the SPAWN absolute admission
+  deadline for stdin writes as well as stdin close. A blocked stdin ordering
+  lock or control writer returns bounded `ISH_ERR_TIMEOUT` instead of defeating
+  the product command timeout; zero-timeout sessions retain legacy synchronous
+  delivery. A failed multi-frame write can still have admitted a prefix, so
+  transactional callers must use staging.
 - The RootFS builder advances to schema v4 with a deterministic tar/gzip
   archiver using a fixed `SOURCE_DATE_EPOCH`, a canonical recursive-submodule
   identity that excludes local ref descriptions, and stable source provenance

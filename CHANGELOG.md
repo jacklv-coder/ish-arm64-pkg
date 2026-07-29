@@ -6,6 +6,10 @@
 
 ## 未发布
 
+- 有限 timeout 的 streaming session 现在让 stdin write 与 stdin close 一样复用
+  SPAWN 的绝对 admission deadline。stdin 顺序锁或控制 writer 被阻塞时会有界返回
+  `ISH_ERR_TIMEOUT`，不会让上层命令超时失效；零 timeout session 保留旧的同步交付语义。
+  多帧 write 失败前已经接纳的前缀仍可能送达，事务型调用方必须使用 staging。
 - RootFS builder 升级到 schema v4，使用固定 `SOURCE_DATE_EPOCH` 的确定性 tar/gzip
   归档器、去除本地 ref 描述的规范化递归子模块身份，以及不把 host `fakefsify` 二进制
   摘要写入 RootFS 内容身份的稳定源码 provenance。候选生成器先以最小环境变量白名单和
