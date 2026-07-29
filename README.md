@@ -13,16 +13,16 @@ RootFS 安装、产品级命令策略、Swift Concurrency 隔离和界面。项�
 
 ## 当前阶段：Native ABI 过渡
 
-当前默认分支已发布 `v0.4.0-abi.6`，正在准备兼容性维护预发布
-`v0.4.0-abi.7`。它们都属于 **Stage1 native ABI 过渡**，不是稳定 `v0.4.0`，
+当前默认分支已发布 `v0.4.0-abi.7`，正在准备兼容性维护预发布
+`v0.4.0-abi.8`。它们都属于 **Stage1 native ABI 过渡**，不是稳定 `v0.4.0`，
 也不是完整 v0.4 Swift API。请同时区分下面四个版本面：
 
-| 版本面 | 当前 `v0.4.0-abi.6` | 计划中的 `v0.4.0-abi.7` |
+| 版本面 | 当前 `v0.4.0-abi.7` | 计划中的 `v0.4.0-abi.8` |
 | --- | --- | --- |
-| 公开 C ABI | `ISH_EMBED_ABI_VERSION == 1`；兼容性符号已发布 | 仍为 ABI 1，新增向后兼容的原子 rename 函数符号 |
+| 公开 C ABI | `ISH_EMBED_ABI_VERSION == 1`；原子 rename 等兼容性符号已发布 | 仍为 ABI 1，不新增符号；收紧有限 session 的 stdin deadline 语义 |
 | 内部 wire protocol | host 与内嵌 supervisor 精确匹配 v4 | 仍为 v4；它不是公开 C ABI 版本 |
-| `Package.swift` | 固定已公开的 `v0.4.0-abi.6` URL/checksum | 发布事务生成只改 manifest 的 release commit，固定到维护二进制 |
-| Swift 源 | 保持 v0.3.3 ABI 兼容，不调用 retain/release | 新增类型化 rename API；通过 weak fallback 兼容旧 binary |
+| `Package.swift` | 固定已公开的 `v0.4.0-abi.7` URL/checksum | 发布事务生成只改 manifest 的 release commit，固定到维护二进制 |
+| Swift 源 | 保持 v0.3.3 ABI 兼容，已提供类型化 rename | 同一 API；有限 stdin write 不再绕过产品 deadline |
 
 Stage1 的 native runtime 已加入 session retain/release、可等待 kernel 线程、soft-halt、
 严格 v4 协议和完整 session close 等底层能力。现有 Swift wrapper 刻意不调用新增
@@ -40,7 +40,8 @@ RootFS 不提交到本仓库、不包含在 XCFramework 或 GitHub Release 中�
 
 - 每个宿主进程只支持一个有效的 `IshInstance` 生命周期，可并发运行多个 command session。
 - 支持一次性命令与流式 session；流式 session 可读写标准流、关闭 stdin、发送信号、
-  调整 PTY 尺寸并等待退出。
+  调整 PTY 尺寸并等待退出。有限 timeout session 的 stdin write/close 复用 SPAWN 的
+  绝对 admission deadline；多帧 write 失败时可能已经接纳前缀，事务型输入必须 staging。
 - `/srv/vms/<name>` 下的目录树可作为持久化 chroot。它隔离文件视图，但不是硬件虚拟机，
   也不是针对恶意代码的安全边界。
 - native reader 对协议帧和每个 session 的输出积压设置硬上限；host→guest 控制队列也有
@@ -68,13 +69,13 @@ JIT 脏页一致性必须修改模拟器核心，无法只在 outer package 或 
 窄差异拥有独立 PR、CI 和精确 gitlink，PocketRoot 的构建与发布也因此可复现。我们不会在
 本地直接改写别人维护的上游仓库；适合通用化的修复仍可回馈
 [iSH upstream](https://github.com/ish-app/ish)，但在上游接受并发布前由 fork 承担项目门禁。
-当前 `v0.4.0-abi.7` 源码变更不纳入 RootFS，也不提交任何预构建
+当前 `v0.4.0-abi.8` 源码变更不纳入 RootFS，也不提交任何预构建
 XCFramework/guest binary；二进制只能在后续发布事务通过后生成和发布。
 
 ## 安装状态
 
-`v0.4.0-abi.6` 已公开且当前 [`Package.swift`](Package.swift) 固定到它。
-`v0.4.0-abi.7` 发布前，manifest 继续指向这个已验证的资产，不会提前引用 404 URL。
+`v0.4.0-abi.7` 已公开且当前 [`Package.swift`](Package.swift) 固定到它。
+`v0.4.0-abi.8` 发布前，manifest 继续指向这个已验证的资产，不会提前引用 404 URL。
 在 Xcode 的 **File → Add Package Dependencies…** 中使用：
 
 ```text
@@ -84,8 +85,9 @@ https://github.com/jacklv-coder/ish-arm64-pkg
 请选择明确包含 `libIshKernel.xcframework.zip`、对应源码归档，并且 manifest URL/checksum
 与同一标签匹配的版本。业务工程不需要安装 Meson、Zig 或 LLVM。
 
-`v0.4.0-abi.7` 新增无 shell、无 check-then-rename 竞争窗口的 guest 原子重命名，
-并把目标已存在映射为 Swift 类型化错误；它不实现原生 Agent Loop，也不会
+`v0.4.0-abi.7` 已提供无 shell、无 check-then-rename 竞争窗口的 guest 原子重命名。
+`v0.4.0-abi.8` 让有限 timeout session 的 stdin write/close 都受同一 SPAWN
+绝对 deadline 约束；它不实现原生 Agent Loop，也不会
 在 App 内安装 Codex CLI。Node.js/npm 如有需要仍由
 RootFS/guest 包管理流程选择，不属于 runtime 的强制依赖。
 
@@ -119,9 +121,9 @@ do {
 
 `IshSpawnOptions.timeout` 同时适用于 `runOneshot` 与 streaming `spawn`。有限超时从
 Swift API 入口开始，先扣除 argv/env/cwd/chroot 的封送时间，再覆盖 native SPAWN
-staging gate 和控制队列接纳；有限 streaming session 的 SPAWN、stdin close 与
+staging gate 和控制队列接纳；有限 streaming session 的 SPAWN、stdin write/close 与
 terminate 采用保持顺序的有界异步接纳。session 会保留 native SPAWN 的绝对 deadline，
-stdin close 复用同一期限取得 writer gate，过期时返回 `ISH_ERR_TIMEOUT`；调用方仍须
+stdin write/close 复用同一期限取得顺序锁和 writer gate，过期时返回 `ISH_ERR_TIMEOUT`；调用方仍须
 读取权威 `EXITED` 才能确认终止。stdin close 遇到 active stdin write 时返回
 `ISH_ERR_BUSY`，不会排在它后面等待。如果 runtime 无法确认命令已清理，会转入
 shutting-down 状态而不是遗留无主 guest 进程。

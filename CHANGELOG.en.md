@@ -20,7 +20,22 @@ Chinese is the primary changelog and this file is its maintained English mirror.
   explicitly unapproved for distribution without changing the XCFramework
   Release's RootFS exclusion policy.
 
-## v0.4.0-abi.7 (planned Stage1 maintenance prerelease)
+## v0.4.0-abi.8 (planned Stage1 maintenance prerelease)
+
+This is a compatibility maintenance release after `v0.4.0-abi.7`. It remains a
+prerelease and is **not stable v0.4.0**.
+
+- Finite-timeout streaming sessions now reuse the SPAWN absolute admission
+  deadline for stdin writes as well as stdin close. A blocked stdin ordering
+  lock or control writer returns bounded `ISH_ERR_TIMEOUT` instead of defeating
+  the product command timeout; zero-timeout sessions retain legacy synchronous
+  delivery. A failed multi-frame write can still have admitted a prefix, so
+  transactional callers must use staging.
+- The public C ABI remains version 1, wire protocol remains v4, and no public
+  symbol is added. RootFS remains outside the Release. This version does not
+  implement a native Agent Loop or install Codex CLI.
+
+## v0.4.0-abi.7 (published Stage1 maintenance prerelease)
 
 This is a compatibility maintenance release after `v0.4.0-abi.6`. It remains a
 prerelease and is **not stable v0.4.0**.
@@ -35,8 +50,8 @@ prerelease and is **not stable v0.4.0**.
   helper failure fails closed.
 - The Swift API adds `IshInstance.renameNoReplace(from:to:timeout:)` and
   `IshFilesystemError`. An existing destination maps to `.destinationExists`.
-  While source temporarily links `v0.4.0-abi.6`, a weak fallback reports
-  unsupported instead of producing a missing symbol.
+  Before the release manifest update, a weak fallback remains compatible with
+  the older binary instead of producing a missing symbol.
 - The public C ABI version remains 1 and wire protocol remains v4; the new
   function symbol is backward-compatible and additive. RootFS remains outside
   the Release. This version does not implement a native Agent Loop or install

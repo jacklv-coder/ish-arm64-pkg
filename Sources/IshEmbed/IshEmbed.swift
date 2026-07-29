@@ -64,10 +64,10 @@ public struct IshSpawnOptions {
     /// Starts at the Swift API entry. For oneshot commands, bounds Swift option
     /// staging plus the complete native execution and cleanup path. For
     /// streaming spawn, bounds Swift/native SPAWN staging and admission, and
-    /// selects ordered bounded admission for stdin close and terminate. Callers
-    /// still confirm streaming termination by reading the authoritative exit
-    /// event; stdin close may report busy while an active write owns its order
-    /// gate.
+    /// selects ordered bounded admission for stdin writes/close and terminate.
+    /// Callers still confirm streaming termination by reading the authoritative
+    /// exit event; stdin close may report busy while an active write owns its
+    /// order gate.
     public var timeout: TimeInterval?
     /// If non-nil, the child chroots to this guest path before exec.
     /// Used for VM-style isolation; pass `/srv/vms/<name>` to confine
@@ -804,6 +804,10 @@ public final class IshSession: @unchecked Sendable {
         }
     }
 
+    /// Queues stdin bytes in order. Finite-timeout sessions reuse the original
+    /// SPAWN admission deadline, so a stalled transport cannot make this call
+    /// wait indefinitely. A failed multi-frame write may have admitted a
+    /// prefix; callers requiring transactional semantics must stage input.
     public func write(_ data: Data) throws {
         try withRawCall { r in
             try data.withUnsafeBytes { rawBuf in
