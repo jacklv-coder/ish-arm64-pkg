@@ -383,6 +383,35 @@ final class IshEmbedTests: XCTestCase {
         XCTAssertEqual(counts.shutdown, 1)
     }
 
+    func testPerCallStdinTimeoutRejectsInvalidValuesBeforeNativeEntry() throws {
+        let native = LifecycleNativeHarness()
+        let instance = IshInstance(nativeCalls: native.nativeCalls())
+        try instance.boot(.init(rootfsPath: "/unused-test-rootfs"))
+        let session = try instance.spawn(.init(argv: ["/bin/true"]))
+
+        for timeout in [
+            TimeInterval.zero,
+            -1,
+            .infinity,
+            -.infinity,
+            .nan,
+        ] {
+            XCTAssertThrowsError(
+                try session.write(Data([0x41]), timeout: timeout)
+            ) {
+                XCTAssertEqual(ishErrorCode($0), ISH_ERR_INVALID_ARG.rawValue)
+            }
+            XCTAssertThrowsError(
+                try session.closeStdin(timeout: timeout)
+            ) {
+                XCTAssertEqual(ishErrorCode($0), ISH_ERR_INVALID_ARG.rawValue)
+            }
+        }
+
+        session.close()
+        try instance.shutdown()
+    }
+
     func testProductionSessionLeaseSurvivesUntilNativeCloseReturns() throws {
         let closeEntered = DispatchSemaphore(value: 0)
         let releaseClose = DispatchSemaphore(value: 0)

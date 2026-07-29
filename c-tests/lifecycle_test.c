@@ -2569,6 +2569,68 @@ static int test_control_streaming_write_deadline(void) {
     return ok ? 0 : 1;
 }
 
+static int test_control_per_write_deadline(void) {
+    g_mode = FAKE_WRITER_LOCK_HOLD;
+    ish_embed_instance_t *inst = boot_instance();
+    ish_embed_session_t *trigger = spawn_echo(inst);
+    ish_embed_session_t *session = spawn_echo(inst);
+
+    struct bounded_queue_call holder;
+    pthread_t holder_thread;
+    if (start_bounded_queue_call(&holder, &holder_thread, trigger,
+                                 BOUNDED_QUEUE_RESIZE, NULL, 0) != 0)
+        return 1;
+    if (!wait_fake_flag(&g_writer_lock_held, 2000)) {
+        fprintf(stderr, "per-write deadline: writer lock was not held\n");
+        pthread_mutex_lock(&g_fake_lock);
+        g_release_writer_lock = 1;
+        pthread_cond_broadcast(&g_fake_cond);
+        pthread_mutex_unlock(&g_fake_lock);
+        pthread_join(holder_thread, NULL);
+        return 1;
+    }
+
+    uint8_t input[] = {'b', 'o', 'u', 'n', 'd', 'e', 'd'};
+    uint64_t start = monotonic_ms();
+    int write_rc = ish_embed_session_write_timeout(
+        session, input, sizeof(input), 100);
+    uint64_t elapsed_ms = monotonic_ms() - start;
+    uint64_t close_start = monotonic_ms();
+    int close_rc = ish_embed_session_close_stdin_timeout(session, 100);
+    uint64_t close_elapsed_ms = monotonic_ms() - close_start;
+    int ok = write_rc == ISH_ERR_TIMEOUT &&
+        elapsed_ms >= 50 && elapsed_ms <= 350 &&
+        close_rc == ISH_ERR_TIMEOUT &&
+        close_elapsed_ms >= 50 && close_elapsed_ms <= 350 &&
+        !atomic_load(&holder.done) &&
+        ish_embed_session_write_timeout(
+            session, input, sizeof(input), 0) == ISH_ERR_INVALID_ARG &&
+        ish_embed_session_close_stdin_timeout(
+            session, 0) == ISH_ERR_INVALID_ARG;
+    if (!ok) {
+        fprintf(stderr,
+                "per-write deadline: write=%d/%llums close=%d/%llums "
+                "holder=%d\n",
+                write_rc, (unsigned long long)elapsed_ms,
+                close_rc, (unsigned long long)close_elapsed_ms,
+                atomic_load(&holder.done));
+    }
+
+    pthread_mutex_lock(&g_fake_lock);
+    g_release_writer_lock = 1;
+    pthread_cond_broadcast(&g_fake_cond);
+    pthread_mutex_unlock(&g_fake_lock);
+    pthread_join(holder_thread, NULL);
+    if (holder.rc != ISH_OK) ok = 0;
+    ish_embed_session_close(session);
+    ish_embed_session_close(trigger);
+    if (ish_embed_shutdown(inst, 2000) != ISH_OK) ok = 0;
+    if (ok)
+        fprintf(stderr,
+                "per-call stdin write deadline bounded legacy session: OK\n");
+    return ok ? 0 : 1;
+}
+
 static int test_control_streaming_queue_deadline(void) {
     g_mode = FAKE_WRITER_LOCK_HOLD;
     ish_embed_instance_t *inst = boot_instance();
@@ -3666,7 +3728,7 @@ int main(int argc, char **argv) {
         return 2;
     }
     if (argc != 2) {
-        fprintf(stderr, "usage: %s boot-timeout|bad-hello-ack|install-failure|bundled-supervisor-digest-mismatch|bundled-supervisor-path-mismatch|custom-supervisor|boot-null-output|stdin-close-order|control-frame-limit|control-critical-close|control-same-session-close|control-exited-same-session-close|signal-close-order|resize-close-order|terminate-close-order|control-critical-oneshot|control-preblocked-oneshot|control-byte-limit|control-byte-reserve|control-spawn-gate|control-oneshot-spawn-lock|control-streaming-spawn-lock|control-finite-streaming|control-finite-streaming-write|control-streaming-write-deadline|control-streaming-queue-deadline|control-streaming-stdin-deadline|control-streaming-precommit-deadline|streaming-instance-gate|supervisor-error|close-race|backlog|frame-backlog|backlog-control-pressure|borrow-shutdown|double-shutdown|active-call|broken-control|protocol-fatal|protocol-fatal-control-pressure|malformed-event TYPE|output-allocation-failure|spawn-argument-bound|shutdown-drain|log-backpressure|oneshot-timeout|oneshot-output|rename-noreplace\n", argv[0]);
+        fprintf(stderr, "usage: %s boot-timeout|bad-hello-ack|install-failure|bundled-supervisor-digest-mismatch|bundled-supervisor-path-mismatch|custom-supervisor|boot-null-output|stdin-close-order|control-frame-limit|control-critical-close|control-same-session-close|control-exited-same-session-close|signal-close-order|resize-close-order|terminate-close-order|control-critical-oneshot|control-preblocked-oneshot|control-byte-limit|control-byte-reserve|control-spawn-gate|control-oneshot-spawn-lock|control-streaming-spawn-lock|control-finite-streaming|control-finite-streaming-write|control-streaming-write-deadline|control-per-write-deadline|control-streaming-queue-deadline|control-streaming-stdin-deadline|control-streaming-precommit-deadline|streaming-instance-gate|supervisor-error|close-race|backlog|frame-backlog|backlog-control-pressure|borrow-shutdown|double-shutdown|active-call|broken-control|protocol-fatal|protocol-fatal-control-pressure|malformed-event TYPE|output-allocation-failure|spawn-argument-bound|shutdown-drain|log-backpressure|oneshot-timeout|oneshot-output|rename-noreplace\n", argv[0]);
         return 2;
     }
     if (strcmp(argv[1], "boot-timeout") == 0) return test_boot_timeout_cleanup();
@@ -3706,6 +3768,8 @@ int main(int argc, char **argv) {
         return test_control_finite_streaming_write_admission();
     if (strcmp(argv[1], "control-streaming-write-deadline") == 0)
         return test_control_streaming_write_deadline();
+    if (strcmp(argv[1], "control-per-write-deadline") == 0)
+        return test_control_per_write_deadline();
     if (strcmp(argv[1], "control-streaming-queue-deadline") == 0) return test_control_streaming_queue_deadline();
     if (strcmp(argv[1], "control-streaming-stdin-deadline") == 0)
         return test_control_streaming_stdin_close_deadline();

@@ -26,6 +26,26 @@ int ish_embed_rename_noreplace(ish_embed_instance_t *inst,
     return ISH_SWIFT_ERR_UNSUPPORTED;
 }
 
+__attribute__((weak))
+int ish_embed_session_write_timeout(ish_embed_session_t *session,
+                                    const uint8_t *buf,
+                                    size_t len,
+                                    uint32_t timeout_ms) {
+    (void)session;
+    (void)buf;
+    (void)len;
+    (void)timeout_ms;
+    return ISH_SWIFT_ERR_UNSUPPORTED;
+}
+
+__attribute__((weak))
+int ish_embed_session_close_stdin_timeout(ish_embed_session_t *session,
+                                          uint32_t timeout_ms) {
+    (void)session;
+    (void)timeout_ms;
+    return ISH_SWIFT_ERR_UNSUPPORTED;
+}
+
 int ish_embed_swift_rename_noreplace(ish_embed_instance_t *inst,
                                      const char *source,
                                      const char *destination,
@@ -33,4 +53,18 @@ int ish_embed_swift_rename_noreplace(ish_embed_instance_t *inst,
                                      int32_t *out_guest_errno) {
     return ish_embed_rename_noreplace(
         inst, source, destination, timeout_ms, out_guest_errno);
+}
+
+int ish_embed_swift_session_write_timeout(ish_embed_session_t *session,
+                                          const uint8_t *buf,
+                                          size_t len,
+                                          uint32_t timeout_ms) {
+    return ish_embed_session_write_timeout(
+        session, buf, len, timeout_ms);
+}
+
+int ish_embed_swift_session_close_stdin_timeout(
+        ish_embed_session_t *session,
+        uint32_t timeout_ms) {
+    return ish_embed_session_close_stdin_timeout(session, timeout_ms);
 }

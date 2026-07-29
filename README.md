@@ -13,16 +13,16 @@ RootFS 安装、产品级命令策略、Swift Concurrency 隔离和界面。项�
 
 ## 当前阶段：Native ABI 过渡
 
-当前默认分支已发布 `v0.4.0-abi.7`，正在准备兼容性维护预发布
-`v0.4.0-abi.8`。它们都属于 **Stage1 native ABI 过渡**，不是稳定 `v0.4.0`，
+当前默认分支已发布 `v0.4.0-abi.8`，正在准备兼容性维护预发布
+`v0.4.0-abi.9`。它们都属于 **Stage1 native ABI 过渡**，不是稳定 `v0.4.0`，
 也不是完整 v0.4 Swift API。请同时区分下面四个版本面：
 
-| 版本面 | 当前 `v0.4.0-abi.7` | 计划中的 `v0.4.0-abi.8` |
+| 版本面 | 当前 `v0.4.0-abi.8` | 计划中的 `v0.4.0-abi.9` |
 | --- | --- | --- |
-| 公开 C ABI | `ISH_EMBED_ABI_VERSION == 1`；原子 rename 等兼容性符号已发布 | 仍为 ABI 1，不新增符号；收紧有限 session 的 stdin deadline 语义 |
+| 公开 C ABI | `ISH_EMBED_ABI_VERSION == 1`；原子 rename 与有限 stdin deadline 已发布 | 仍为 ABI 1；新增单次 stdin write/close timeout 兼容性符号 |
 | 内部 wire protocol | host 与内嵌 supervisor 精确匹配 v4 | 仍为 v4；它不是公开 C ABI 版本 |
-| `Package.swift` | 固定已公开的 `v0.4.0-abi.7` URL/checksum | 发布事务生成只改 manifest 的 release commit，固定到维护二进制 |
-| Swift 源 | 保持 v0.3.3 ABI 兼容，已提供类型化 rename | 同一 API；有限 stdin write 不再绕过产品 deadline |
+| `Package.swift` | 固定已公开的 `v0.4.0-abi.8` URL/checksum | 发布事务生成只改 manifest 的 release commit，固定到维护二进制 |
+| Swift 源 | 保持 v0.3.3 ABI 兼容，已提供类型化 rename | 新增 `write(_:timeout:)`/`closeStdin(timeout:)`，且通过 weak shim 兼容当前 binary |
 
 Stage1 的 native runtime 已加入 session retain/release、可等待 kernel 线程、soft-halt、
 严格 v4 协议和完整 session close 等底层能力。现有 Swift wrapper 刻意不调用新增
@@ -69,13 +69,13 @@ JIT 脏页一致性必须修改模拟器核心，无法只在 outer package 或 
 窄差异拥有独立 PR、CI 和精确 gitlink，PocketRoot 的构建与发布也因此可复现。我们不会在
 本地直接改写别人维护的上游仓库；适合通用化的修复仍可回馈
 [iSH upstream](https://github.com/ish-app/ish)，但在上游接受并发布前由 fork 承担项目门禁。
-当前 `v0.4.0-abi.8` 源码变更不纳入 RootFS，也不提交任何预构建
+当前 `v0.4.0-abi.9` 源码变更不纳入 RootFS，也不提交任何预构建
 XCFramework/guest binary；二进制只能在后续发布事务通过后生成和发布。
 
 ## 安装状态
 
-`v0.4.0-abi.7` 已公开且当前 [`Package.swift`](Package.swift) 固定到它。
-`v0.4.0-abi.8` 发布前，manifest 继续指向这个已验证的资产，不会提前引用 404 URL。
+`v0.4.0-abi.8` 已公开且当前 [`Package.swift`](Package.swift) 固定到它。
+`v0.4.0-abi.9` 发布前，manifest 继续指向这个已验证的资产，不会提前引用 404 URL。
 在 Xcode 的 **File → Add Package Dependencies…** 中使用：
 
 ```text
@@ -85,9 +85,10 @@ https://github.com/jacklv-coder/ish-arm64-pkg
 请选择明确包含 `libIshKernel.xcframework.zip`、对应源码归档，并且 manifest URL/checksum
 与同一标签匹配的版本。业务工程不需要安装 Meson、Zig 或 LLVM。
 
-`v0.4.0-abi.7` 已提供无 shell、无 check-then-rename 竞争窗口的 guest 原子重命名。
-`v0.4.0-abi.8` 让有限 timeout session 的 stdin write/close 都受同一 SPAWN
-绝对 deadline 约束；它不实现原生 Agent Loop，也不会
+`v0.4.0-abi.8` 已提供无 shell、无 check-then-rename 竞争窗口的 guest 原子重命名。
+`v0.4.0-abi.9` 新增单次 stdin write/close 的短 timeout，让上层可在分块发送之间
+排空输出并及时响应取消；调用 deadline 与 SPAWN deadline 取更早值。它不实现原生
+Agent Loop，也不会
 在 App 内安装 Codex CLI。Node.js/npm 如有需要仍由
 RootFS/guest 包管理流程选择，不属于 runtime 的强制依赖。
 
@@ -127,6 +128,9 @@ stdin write/close 复用同一期限取得顺序锁和 writer gate，过期时�
 读取权威 `EXITED` 才能确认终止。stdin close 遇到 active stdin write 时返回
 `ISH_ERR_BUSY`，不会排在它后面等待。如果 runtime 无法确认命令已清理，会转入
 shutting-down 状态而不是遗留无主 guest 进程。
+需要在长命令期间及时检查取消时，可使用 `write(_:timeout:)` 与
+`closeStdin(timeout:)` 为每次调用设置更短 deadline，并在分块调用之间持续读取输出；
+调用 deadline 与原始 SPAWN deadline 取更早值。
 NaN/正负无穷会在进入 native 前返回 `ISH_ERR_INVALID_ARG (-13)`；封送后剩余不足
 1 ms 时会返回 `ISH_ERR_TIMEOUT (-12)`，不会把 `0` 传给 native 而退化成“无超时”。
 

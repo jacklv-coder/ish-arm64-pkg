@@ -15,7 +15,20 @@
   `fs.tar.gz`，环境差异仍保留在外部证据中。CI 不上传制品，候选仍明确标记为未获分发
   批准，不改变 XCFramework Release 的 RootFS 排除策略。
 
-## v0.4.0-abi.8（计划中的 Stage1 维护预发布）
+## v0.4.0-abi.9（计划中的 Stage1 维护预发布）
+
+这是 `v0.4.0-abi.8` 之后的兼容性维护版本，仍是 prerelease，**不是稳定
+v0.4.0**。
+
+- C API 新增 `ish_embed_session_write_timeout` 与
+  `ish_embed_session_close_stdin_timeout`，Swift 新增对应的
+  `write(_:timeout:)`/`closeStdin(timeout:)`。调用方可以为单次 stdin
+  控制设置短 deadline；它与 session 原始 SPAWN deadline 取更早值，超时不会发布
+  late frame，便于长命令在分块写入之间排空输出并及时响应取消。
+- 公开 C ABI 版本仍为 1，wire protocol 仍为 v4；新增函数符号是向后兼容扩展。
+  RootFS 不进入 Release。本版本不实现原生 Agent Loop，也不会安装 Codex CLI。
+
+## v0.4.0-abi.8（已发布的 Stage1 维护预发布）
 
 这是 `v0.4.0-abi.7` 之后的兼容性维护版本，仍是 prerelease，**不是稳定
 v0.4.0**。

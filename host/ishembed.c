@@ -1814,14 +1814,14 @@ int ish_embed_session_read(ish_embed_session_t *s,
     return ISH_OK;
 }
 
-int ish_embed_session_write(ish_embed_session_t *s,
-                            const uint8_t *buf, size_t len) {
+static int session_write_until(ish_embed_session_t *s,
+                               const uint8_t *buf, size_t len,
+                               uint64_t deadline_ms,
+                               int bounded) {
     if (!s) return ISH_ERR_INVALID_ARG;
     if (len == 0) return ISH_OK;
-    uint64_t streaming_deadline_ms = s->streaming_deadline_ms;
-    int bounded_streaming_controls = streaming_deadline_ms != 0;
-    if (bounded_streaming_controls) {
-        if (!mutex_lock_until(&s->stdin_lock, streaming_deadline_ms))
+    if (bounded) {
+        if (!mutex_lock_until(&s->stdin_lock, deadline_ms))
             return ISH_ERR_TIMEOUT;
     } else {
         pthread_mutex_lock(&s->stdin_lock);
@@ -1843,10 +1843,10 @@ int ish_embed_session_write(ish_embed_session_t *s,
     /* split into 64KiB chunks to keep frames bounded */
     while (len > 0) {
         size_t chunk = len > 65536 ? 65536 : len;
-        int rc = bounded_streaming_controls
+        int rc = bounded
             ? send_frame_async_normal_until(
                 inst, ISH_FT_STDIN_DATA, 0, sid, buf, (uint32_t)chunk,
-                streaming_deadline_ms)
+                deadline_ms)
             : send_frame(
                 inst, ISH_FT_STDIN_DATA, 0, sid, buf, (uint32_t)chunk);
         if (rc != 0) {
@@ -1857,6 +1857,28 @@ int ish_embed_session_write(ish_embed_session_t *s,
     }
     pthread_mutex_unlock(&s->stdin_lock);
     return ISH_OK;
+}
+
+int ish_embed_session_write(ish_embed_session_t *s,
+                            const uint8_t *buf, size_t len) {
+    if (!s) return ISH_ERR_INVALID_ARG;
+    uint64_t deadline_ms = s->streaming_deadline_ms;
+    return session_write_until(
+        s, buf, len, deadline_ms, deadline_ms != 0);
+}
+
+int ish_embed_session_write_timeout(ish_embed_session_t *s,
+                                    const uint8_t *buf, size_t len,
+                                    uint32_t timeout_ms) {
+    if (!s || timeout_ms == 0) return ISH_ERR_INVALID_ARG;
+    uint64_t now = now_ms();
+    uint64_t call_deadline = now > UINT64_MAX - timeout_ms
+        ? UINT64_MAX : now + timeout_ms;
+    uint64_t session_deadline = s->streaming_deadline_ms;
+    uint64_t deadline_ms =
+        session_deadline != 0 && session_deadline < call_deadline
+            ? session_deadline : call_deadline;
+    return session_write_until(s, buf, len, deadline_ms, 1);
 }
 
 static int send_session_control(ish_embed_session_t *s, uint8_t type,
@@ -1911,11 +1933,11 @@ int ish_embed_session_terminate(ish_embed_session_t *s, uint32_t grace_ms) {
     return send_session_control(s, ISH_FT_TERMINATE, NULL, 0);
 }
 
-int ish_embed_session_close_stdin(ish_embed_session_t *s) {
+static int session_close_stdin_until(ish_embed_session_t *s,
+                                     uint64_t deadline_ms,
+                                     int bounded) {
     if (!s) return ISH_ERR_INVALID_ARG;
-    uint64_t streaming_deadline_ms = s->streaming_deadline_ms;
-    int bounded_streaming_controls = streaming_deadline_ms != 0;
-    if (bounded_streaming_controls) {
+    if (bounded) {
         int lock_rc = pthread_mutex_trylock(&s->stdin_lock);
         if (lock_rc == EBUSY) return ISH_ERR_BUSY;
         if (lock_rc != 0) return ISH_ERR_THREAD;
@@ -1937,10 +1959,10 @@ int ish_embed_session_close_stdin(ish_embed_session_t *s) {
         pthread_mutex_unlock(&s->stdin_lock);
         return ISH_OK;
     }
-    int rc = bounded_streaming_controls
+    int rc = bounded
         ? send_frame_async_normal_until(
             inst, ISH_FT_STDIN_CLOSE, 0, sid, NULL, 0,
-            streaming_deadline_ms)
+            deadline_ms)
         : send_frame(inst, ISH_FT_STDIN_CLOSE, 0, sid, NULL, 0);
     if (rc != ISH_OK) {
         pthread_mutex_lock(&s->lock);
@@ -1949,6 +1971,25 @@ int ish_embed_session_close_stdin(ish_embed_session_t *s) {
     }
     pthread_mutex_unlock(&s->stdin_lock);
     return rc;
+}
+
+int ish_embed_session_close_stdin(ish_embed_session_t *s) {
+    if (!s) return ISH_ERR_INVALID_ARG;
+    uint64_t deadline_ms = s->streaming_deadline_ms;
+    return session_close_stdin_until(s, deadline_ms, deadline_ms != 0);
+}
+
+int ish_embed_session_close_stdin_timeout(ish_embed_session_t *s,
+                                          uint32_t timeout_ms) {
+    if (!s || timeout_ms == 0) return ISH_ERR_INVALID_ARG;
+    uint64_t now = now_ms();
+    uint64_t call_deadline = now > UINT64_MAX - timeout_ms
+        ? UINT64_MAX : now + timeout_ms;
+    uint64_t session_deadline = s->streaming_deadline_ms;
+    uint64_t deadline_ms =
+        session_deadline != 0 && session_deadline < call_deadline
+            ? session_deadline : call_deadline;
+    return session_close_stdin_until(s, deadline_ms, 1);
 }
 
 void ish_embed_session_close(ish_embed_session_t *s) {
