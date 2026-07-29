@@ -363,7 +363,7 @@ int ish_ffi_install_executable(const char *guest_path,
     err = generic_setattrat(AT_PWD, temp_path, a, false);
     if (err < 0) goto fail_temp;
 
-    err = generic_renameat(AT_PWD, temp_path, AT_PWD, guest_path);
+    err = generic_renameat(AT_PWD, temp_path, AT_PWD, guest_path, 0);
     if (err < 0) goto fail_temp;
 
     /* fakefs updates a host file plus SQLite metadata. Reopen and compare the

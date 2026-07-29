@@ -323,6 +323,7 @@ for library in "$device_lib" "$simulator_lib"; do
         _ish_embed_session_retain \
         _ish_embed_session_release \
         _ish_embed_setup_vm_root \
+        _ish_embed_rename_noreplace \
         _ish_embed_shutdown \
         _ish_embed_bundled_supervisor \
         _ish_embed_bundled_supervisor_len \
@@ -354,6 +355,17 @@ device_clang="$(xcrun --sdk iphoneos --find clang)"
     "$PKG_ROOT/c-tests/smoke.c" "$device_lib" -lsqlite3 \
     -o "$VERIFY_TMP/ishembed-device-link"
 
+"$device_clang" \
+    -target arm64-apple-ios18.0 \
+    -isysroot "$device_sdk" \
+    -Wl,-fatal_warnings \
+    -I"$PKG_ROOT/include" -I"$PKG_ROOT/protocol" \
+    -I"$PKG_ROOT/Sources/CIshEmbed/include" \
+    "$PKG_ROOT/c-tests/swift_bridge_smoke.c" \
+    "$PKG_ROOT/Sources/CIshEmbed/CIshEmbed.c" \
+    "$device_lib" -lsqlite3 \
+    -o "$VERIFY_TMP/ishembed-device-bridge-link"
+
 simulator_sdk="$(xcrun --sdk iphonesimulator --show-sdk-path)"
 simulator_clang="$(xcrun --sdk iphonesimulator --find clang)"
 "$simulator_clang" \
@@ -364,12 +376,35 @@ simulator_clang="$(xcrun --sdk iphonesimulator --find clang)"
     "$PKG_ROOT/c-tests/smoke.c" "$simulator_lib" -lsqlite3 \
     -o "$VERIFY_TMP/ishembed-simulator-link"
 
+"$simulator_clang" \
+    -target arm64-apple-ios18.0-simulator \
+    -isysroot "$simulator_sdk" \
+    -Wl,-fatal_warnings \
+    -I"$PKG_ROOT/include" -I"$PKG_ROOT/protocol" \
+    -I"$PKG_ROOT/Sources/CIshEmbed/include" \
+    "$PKG_ROOT/c-tests/swift_bridge_smoke.c" \
+    "$PKG_ROOT/Sources/CIshEmbed/CIshEmbed.c" \
+    "$simulator_lib" -lsqlite3 \
+    -o "$VERIFY_TMP/ishembed-simulator-bridge-link"
+
 for linked_binary in \
     "$VERIFY_TMP/ishembed-device-link" \
-    "$VERIFY_TMP/ishembed-simulator-link"; do
+    "$VERIFY_TMP/ishembed-simulator-link" \
+    "$VERIFY_TMP/ishembed-device-bridge-link" \
+    "$VERIFY_TMP/ishembed-simulator-bridge-link"; do
     linked_exports="$(nm -gU "$linked_binary" | awk '{print $NF}')"
     ! grep -qx _ish_embed_sha256_matches_hex <<< "$linked_exports"
     ! grep -qx _ish_embed_supervisor_metadata_valid <<< "$linked_exports"
+done
+
+for bridge_binary in \
+    "$VERIFY_TMP/ishembed-device-bridge-link" \
+    "$VERIFY_TMP/ishembed-simulator-bridge-link"; do
+    bridge_symbols="$(nm -m "$bridge_binary")"
+    grep -Eq '\(__TEXT,__text\) external _ish_embed_rename_noreplace$' \
+        <<< "$bridge_symbols"
+    ! grep -Eq '\(__TEXT,__text\) weak external _ish_embed_rename_noreplace$' \
+        <<< "$bridge_symbols"
 done
 
 verify_final_link_build_version() {

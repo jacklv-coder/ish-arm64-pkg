@@ -15,7 +15,24 @@
   `fs.tar.gz`，环境差异仍保留在外部证据中。CI 不上传制品，候选仍明确标记为未获分发
   批准，不改变 XCFramework Release 的 RootFS 排除策略。
 
-## v0.4.0-abi.6（计划中的 Stage1 维护预发布）
+## v0.4.0-abi.7（计划中的 Stage1 维护预发布）
+
+这是 `v0.4.0-abi.6` 之后的兼容性维护版本，仍是 prerelease，**不是稳定
+v0.4.0**。
+
+- 固定的 iSH fork 新增 `RENAME_NOREPLACE` syscall 语义，并在 Darwin fakefs 后端使用
+  `renameatx_np(RENAME_EXCL)`、Linux host 后端使用 `renameat2`，从底层保证目标存在时
+  不覆盖，不采用易竞争的“先检查、再移动”。
+- 公开 C API 新增 `ish_embed_rename_noreplace`。它通过启动时选定的内容寻址 guest
+  supervisor 执行原子重命名，以有界十进制记录返回 guest errno；协议损坏或 helper
+  异常会 fail closed。
+- Swift API 新增 `IshInstance.renameNoReplace(from:to:timeout:)` 与
+  `IshFilesystemError`。目标已存在映射为 `.destinationExists`；源码临时链接
+  `v0.4.0-abi.6` 时通过 weak fallback 明确报告 unsupported，不会产生缺失符号。
+- 公开 C ABI 版本仍为 1，wire protocol 仍为 v4；新增函数符号是向后兼容扩展。
+  RootFS 不进入 Release。本版本不实现原生 Agent Loop，也不会安装 Codex CLI。
+
+## v0.4.0-abi.6（已发布的 Stage1 维护预发布）
 
 这是 `v0.4.0-abi.5` 之后的兼容性维护版本，仍是 prerelease，**不是稳定
 v0.4.0**。

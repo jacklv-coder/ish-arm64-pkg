@@ -259,6 +259,8 @@ test('lifecycle_oneshot_timeout', lifecycle_test,
     args: ['oneshot-timeout'], timeout: 10)
 test('lifecycle_oneshot_output', lifecycle_test,
     args: ['oneshot-output'], timeout: 10)
+test('lifecycle_rename_noreplace', lifecycle_test,
+    args: ['rename-noreplace'], timeout: 10)
 
 # The supervisor runs inside Linux/iSH, but its stdin queue has a host-only
 # deterministic harness. Keep it out of iOS cross builds while running it in

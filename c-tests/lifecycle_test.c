@@ -60,6 +60,7 @@ enum fake_mode {
     FAKE_SPAWN_ARGUMENT_BOUND,
     FAKE_WRITER_LOCK_HOLD,
     FAKE_WRITER_PRECOMMIT_DEADLINE,
+    FAKE_RENAME_NOREPLACE,
 };
 
 enum malformed_event_kind {
@@ -140,6 +141,11 @@ static int g_oneshot_terminate_status;
 static int g_oneshot_signal_attempts;
 static int g_oneshot_signal_status;
 static enum malformed_event_kind g_malformed_event_kind;
+static atomic_int g_rename_spawn_valid;
+static int g_rename_waiting;
+static int g_release_rename;
+
+static void fake_emit_error(uint32_t sid, int32_t err, const char *message);
 
 static int io_write_full(int fd, const void *buf, size_t len) {
     const uint8_t *p = buf;
@@ -199,6 +205,94 @@ static void fake_emit_exit(uint32_t sid, int32_t code, int32_t sig) {
     ish_proto_put_i32(body, code);
     ish_proto_put_i32(body + 4, sig);
     (void)fake_emit(ISH_FT_EXITED, 0, sid, body, sizeof(body));
+}
+
+static void fake_emit_stdout_record(uint32_t sid, const char *record) {
+    size_t record_len = strlen(record);
+    uint8_t body[8 + 32];
+    if (record_len > sizeof(body) - 8) abort();
+    ish_proto_put_u64(body, 1);
+    memcpy(body + 8, record, record_len);
+    (void)fake_emit(ISH_FT_STDOUT_DATA, ISH_FF_SEQ_PRESENT, sid,
+                    body, (uint32_t)(8 + record_len));
+}
+
+static int fake_spawn_take_string(const uint8_t *body, size_t body_len,
+                                  size_t *offset, const uint8_t **bytes,
+                                  uint32_t *length) {
+    if (!body || !offset || !bytes || !length ||
+        *offset > body_len || body_len - *offset < 4)
+        return -1;
+    *length = ish_proto_get_u32(body + *offset);
+    *offset += 4;
+    if (*offset > body_len || (size_t)*length > body_len - *offset)
+        return -1;
+    *bytes = body + *offset;
+    *offset += *length;
+    return 0;
+}
+
+static int fake_spawn_string_equals(const uint8_t *bytes, uint32_t length,
+                                    const char *expected) {
+    size_t expected_len = strlen(expected);
+    return expected_len == length &&
+        memcmp(bytes, expected, expected_len) == 0;
+}
+
+static void fake_handle_rename_spawn(uint32_t sid, const uint8_t *body,
+                                     uint32_t body_len) {
+    size_t offset = 0;
+    const uint8_t *bytes = NULL;
+    uint32_t length = 0;
+    if (fake_spawn_take_string(body, body_len, &offset, &bytes, &length) < 0 ||
+        !fake_spawn_string_equals(bytes, length, "/") ||
+        offset > body_len || body_len - offset < 4)
+        goto invalid;
+    uint32_t argc = ish_proto_get_u32(body + offset);
+    offset += 4;
+    if (argc != 4) goto invalid;
+
+    const uint8_t *argv[4];
+    uint32_t argv_len[4];
+    for (size_t i = 0; i < 4; i++) {
+        if (fake_spawn_take_string(body, body_len, &offset,
+                                   &argv[i], &argv_len[i]) < 0)
+            goto invalid;
+    }
+    if (!fake_spawn_string_equals(argv[0], argv_len[0],
+                                  ish_embed_bundled_supervisor_guest_path) ||
+        !fake_spawn_string_equals(argv[1], argv_len[1],
+                                  "--rename-noreplace") ||
+        !fake_spawn_string_equals(argv[2], argv_len[2], "/source"))
+        goto invalid;
+
+    atomic_store(&g_rename_spawn_valid, 1);
+    if (fake_spawn_string_equals(argv[3], argv_len[3], "/exists"))
+        fake_emit_stdout_record(sid, "17\n");
+    else if (fake_spawn_string_equals(argv[3], argv_len[3], "/malformed"))
+        fake_emit_stdout_record(sid, "oops\n");
+    else if (fake_spawn_string_equals(argv[3], argv_len[3], "/oversized"))
+        fake_emit_stdout_record(sid, "00000000000\n");
+    else if (fake_spawn_string_equals(argv[3], argv_len[3], "/renamed"))
+        fake_emit_stdout_record(sid, "0\n");
+    else if (fake_spawn_string_equals(argv[3], argv_len[3], "/timeout"))
+        return;
+    else if (fake_spawn_string_equals(argv[3], argv_len[3], "/blocked")) {
+        pthread_mutex_lock(&g_fake_lock);
+        g_rename_waiting = 1;
+        pthread_cond_broadcast(&g_fake_cond);
+        while (!g_release_rename)
+            pthread_cond_wait(&g_fake_cond, &g_fake_lock);
+        pthread_mutex_unlock(&g_fake_lock);
+        fake_emit_stdout_record(sid, "0\n");
+    } else
+        goto invalid;
+    fake_emit_exit(sid, 0, 0);
+    return;
+
+invalid:
+    atomic_store(&g_rename_spawn_valid, 0);
+    fake_emit_error(sid, EPROTO, "invalid rename helper spawn");
 }
 
 static void fake_emit_error(uint32_t sid, int32_t err, const char *message) {
@@ -429,6 +523,8 @@ static void *fake_kernel_main(void *unused) {
     }
 
     while (fake_read(&type, &flags, &sid, &body, &body_len) == 0) {
+        if (type == ISH_FT_SPAWN && g_mode == FAKE_RENAME_NOREPLACE)
+            fake_handle_rename_spawn(sid, body, body_len);
         free(body);
         body = NULL;
         if (type == ISH_FT_SPAWN) {
@@ -3372,6 +3468,125 @@ static int test_oneshot_output_limit(void) {
     return 0;
 }
 
+struct rename_call_args {
+    ish_embed_instance_t *inst;
+    int rc;
+    int32_t guest_errno;
+};
+
+static void *rename_call_main(void *opaque) {
+    struct rename_call_args *args = opaque;
+    args->guest_errno = -1;
+    args->rc = ish_embed_rename_noreplace(
+        args->inst, "/source", "/blocked", 2000, &args->guest_errno);
+    return NULL;
+}
+
+static int test_rename_noreplace_api(void) {
+    g_mode = FAKE_RENAME_NOREPLACE;
+    atomic_store(&g_rename_spawn_valid, 0);
+    g_rename_waiting = 0;
+    g_release_rename = 0;
+    ish_embed_instance_t *inst = boot_instance();
+    int32_t guest_errno = -1;
+
+    int rc = ish_embed_rename_noreplace(
+        inst, "relative", "/renamed", 1000, &guest_errno);
+    if (rc != ISH_ERR_INVALID_ARG || guest_errno != -1) {
+        fprintf(stderr, "rename relative validation: rc=%d errno=%d\n",
+                rc, guest_errno);
+        return 1;
+    }
+
+    rc = ish_embed_rename_noreplace(
+        inst, "/source", "/exists", 1000, &guest_errno);
+    int rename_spawn_valid = atomic_load(&g_rename_spawn_valid);
+    if (rc != ISH_OK || guest_errno != EEXIST || !rename_spawn_valid) {
+        fprintf(stderr, "rename existing destination: rc=%d errno=%d valid=%d\n",
+                rc, guest_errno, rename_spawn_valid);
+        return 1;
+    }
+
+    atomic_store(&g_rename_spawn_valid, 0);
+    rc = ish_embed_rename_noreplace(
+        inst, "/source", "/renamed", 1000, &guest_errno);
+    rename_spawn_valid = atomic_load(&g_rename_spawn_valid);
+    if (rc != ISH_OK || guest_errno != 0 || !rename_spawn_valid) {
+        fprintf(stderr, "rename success: rc=%d errno=%d valid=%d\n",
+                rc, guest_errno, rename_spawn_valid);
+        return 1;
+    }
+
+    atomic_store(&g_rename_spawn_valid, 0);
+    rc = ish_embed_rename_noreplace(
+        inst, "/source", "/malformed", 1000, &guest_errno);
+    rename_spawn_valid = atomic_load(&g_rename_spawn_valid);
+    if (rc != ISH_ERR_PROTOCOL || guest_errno != 0 ||
+        !rename_spawn_valid) {
+        fprintf(stderr, "rename malformed record: rc=%d errno=%d valid=%d\n",
+                rc, guest_errno, rename_spawn_valid);
+        return 1;
+    }
+
+    atomic_store(&g_rename_spawn_valid, 0);
+    rc = ish_embed_rename_noreplace(
+        inst, "/source", "/oversized", 1000, &guest_errno);
+    rename_spawn_valid = atomic_load(&g_rename_spawn_valid);
+    if (rc != ISH_ERR_PROTOCOL || guest_errno != 0 ||
+        !rename_spawn_valid) {
+        fprintf(stderr, "rename oversized record: rc=%d errno=%d valid=%d\n",
+                rc, guest_errno, rename_spawn_valid);
+        return 1;
+    }
+
+    atomic_store(&g_rename_spawn_valid, 0);
+    rc = ish_embed_rename_noreplace(
+        inst, "/source", "/timeout", 25, &guest_errno);
+    rename_spawn_valid = atomic_load(&g_rename_spawn_valid);
+    if (rc != ISH_ERR_TIMEOUT || guest_errno != 0 ||
+        !rename_spawn_valid) {
+        fprintf(stderr, "rename timeout: rc=%d errno=%d valid=%d\n",
+                rc, guest_errno, rename_spawn_valid);
+        return 1;
+    }
+
+    struct rename_call_args rename_args = {
+        .inst = inst,
+        .rc = ISH_ERR_INTERNAL,
+        .guest_errno = -1,
+    };
+    pthread_t rename_thread;
+    if (pthread_create(&rename_thread, NULL, rename_call_main,
+                       &rename_args) != 0 ||
+        !wait_fake_flag(&g_rename_waiting, 1000)) {
+        fprintf(stderr, "rename concurrent call did not block\n");
+        return 1;
+    }
+    rc = ish_embed_shutdown(inst, 10);
+    if (rc != ISH_ERR_BUSY) {
+        fprintf(stderr, "rename concurrent shutdown: rc=%d\n", rc);
+        return 1;
+    }
+    pthread_mutex_lock(&g_fake_lock);
+    g_release_rename = 1;
+    pthread_cond_broadcast(&g_fake_cond);
+    pthread_mutex_unlock(&g_fake_lock);
+    if (pthread_join(rename_thread, NULL) != 0 ||
+        rename_args.rc != ISH_OK || rename_args.guest_errno != 0) {
+        fprintf(stderr, "rename concurrent completion: rc=%d errno=%d\n",
+                rename_args.rc, rename_args.guest_errno);
+        return 1;
+    }
+
+    rc = ish_embed_shutdown(inst, 2000);
+    if (rc != ISH_OK) {
+        fprintf(stderr, "rename shutdown: rc=%d\n", rc);
+        return 1;
+    }
+    fprintf(stderr, "atomic no-replace rename API: OK\n");
+    return 0;
+}
+
 int main(int argc, char **argv) {
     if (argc == 3 && strcmp(argv[1], "malformed-event") == 0) {
         if (strcmp(argv[2], "spawned") == 0)
@@ -3392,7 +3607,7 @@ int main(int argc, char **argv) {
         return 2;
     }
     if (argc != 2) {
-        fprintf(stderr, "usage: %s boot-timeout|bad-hello-ack|install-failure|bundled-supervisor-digest-mismatch|bundled-supervisor-path-mismatch|custom-supervisor|boot-null-output|stdin-close-order|control-frame-limit|control-critical-close|control-same-session-close|control-exited-same-session-close|signal-close-order|resize-close-order|terminate-close-order|control-critical-oneshot|control-preblocked-oneshot|control-byte-limit|control-byte-reserve|control-spawn-gate|control-oneshot-spawn-lock|control-streaming-spawn-lock|control-finite-streaming|control-finite-streaming-write|control-streaming-queue-deadline|control-streaming-stdin-deadline|control-streaming-precommit-deadline|streaming-instance-gate|supervisor-error|close-race|backlog|frame-backlog|backlog-control-pressure|borrow-shutdown|double-shutdown|active-call|broken-control|protocol-fatal|protocol-fatal-control-pressure|malformed-event TYPE|output-allocation-failure|spawn-argument-bound|shutdown-drain|log-backpressure|oneshot-timeout|oneshot-output\n", argv[0]);
+        fprintf(stderr, "usage: %s boot-timeout|bad-hello-ack|install-failure|bundled-supervisor-digest-mismatch|bundled-supervisor-path-mismatch|custom-supervisor|boot-null-output|stdin-close-order|control-frame-limit|control-critical-close|control-same-session-close|control-exited-same-session-close|signal-close-order|resize-close-order|terminate-close-order|control-critical-oneshot|control-preblocked-oneshot|control-byte-limit|control-byte-reserve|control-spawn-gate|control-oneshot-spawn-lock|control-streaming-spawn-lock|control-finite-streaming|control-finite-streaming-write|control-streaming-queue-deadline|control-streaming-stdin-deadline|control-streaming-precommit-deadline|streaming-instance-gate|supervisor-error|close-race|backlog|frame-backlog|backlog-control-pressure|borrow-shutdown|double-shutdown|active-call|broken-control|protocol-fatal|protocol-fatal-control-pressure|malformed-event TYPE|output-allocation-failure|spawn-argument-bound|shutdown-drain|log-backpressure|oneshot-timeout|oneshot-output|rename-noreplace\n", argv[0]);
         return 2;
     }
     if (strcmp(argv[1], "boot-timeout") == 0) return test_boot_timeout_cleanup();
@@ -3452,6 +3667,7 @@ int main(int argc, char **argv) {
     if (strcmp(argv[1], "log-backpressure") == 0) return test_log_sink_backpressure();
     if (strcmp(argv[1], "oneshot-timeout") == 0) return test_oneshot_hard_timeout();
     if (strcmp(argv[1], "oneshot-output") == 0) return test_oneshot_output_limit();
+    if (strcmp(argv[1], "rename-noreplace") == 0) return test_rename_noreplace_api();
     fprintf(stderr, "unknown test: %s\n", argv[1]);
     return 2;
 }

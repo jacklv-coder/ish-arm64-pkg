@@ -13,16 +13,16 @@ RootFS 安装、产品级命令策略、Swift Concurrency 隔离和界面。项�
 
 ## 当前阶段：Native ABI 过渡
 
-当前默认分支已发布 `v0.4.0-abi.5`，正在准备兼容性维护预发布
-`v0.4.0-abi.6`。它们都属于 **Stage1 native ABI 过渡**，不是稳定 `v0.4.0`，
+当前默认分支已发布 `v0.4.0-abi.6`，正在准备兼容性维护预发布
+`v0.4.0-abi.7`。它们都属于 **Stage1 native ABI 过渡**，不是稳定 `v0.4.0`，
 也不是完整 v0.4 Swift API。请同时区分下面四个版本面：
 
-| 版本面 | 当前 `v0.4.0-abi.5` | 计划中的 `v0.4.0-abi.6` |
+| 版本面 | 当前 `v0.4.0-abi.6` | 计划中的 `v0.4.0-abi.7` |
 | --- | --- | --- |
-| 公开 C ABI | `ISH_EMBED_ABI_VERSION == 1`；兼容性符号已发布 | 仍为 ABI 1，不新增公开符号 |
+| 公开 C ABI | `ISH_EMBED_ABI_VERSION == 1`；兼容性符号已发布 | 仍为 ABI 1，新增向后兼容的原子 rename 函数符号 |
 | 内部 wire protocol | host 与内嵌 supervisor 精确匹配 v4 | 仍为 v4；它不是公开 C ABI 版本 |
-| `Package.swift` | 固定已公开的 `v0.4.0-abi.5` URL/checksum | 发布事务生成只改 manifest 的 release commit，固定到维护二进制 |
-| Swift 源 | 保持 v0.3.3 ABI 兼容，不调用 retain/release | 保持相同 Swift API 与旧 ABI 用法 |
+| `Package.swift` | 固定已公开的 `v0.4.0-abi.6` URL/checksum | 发布事务生成只改 manifest 的 release commit，固定到维护二进制 |
+| Swift 源 | 保持 v0.3.3 ABI 兼容，不调用 retain/release | 新增类型化 rename API；通过 weak fallback 兼容旧 binary |
 
 Stage1 的 native runtime 已加入 session retain/release、可等待 kernel 线程、soft-halt、
 严格 v4 协议和完整 session close 等底层能力。现有 Swift wrapper 刻意不调用新增
@@ -68,13 +68,13 @@ JIT 脏页一致性必须修改模拟器核心，无法只在 outer package 或 
 窄差异拥有独立 PR、CI 和精确 gitlink，PocketRoot 的构建与发布也因此可复现。我们不会在
 本地直接改写别人维护的上游仓库；适合通用化的修复仍可回馈
 [iSH upstream](https://github.com/ish-app/ish)，但在上游接受并发布前由 fork 承担项目门禁。
-当前 `v0.4.0-abi.6` 源码变更不纳入 RootFS，也不提交任何预构建
+当前 `v0.4.0-abi.7` 源码变更不纳入 RootFS，也不提交任何预构建
 XCFramework/guest binary；二进制只能在后续发布事务通过后生成和发布。
 
 ## 安装状态
 
-`v0.4.0-abi.5` 已公开且当前 [`Package.swift`](Package.swift) 固定到它。
-`v0.4.0-abi.6` 发布前，manifest 继续指向这个已验证的资产，不会提前引用 404 URL。
+`v0.4.0-abi.6` 已公开且当前 [`Package.swift`](Package.swift) 固定到它。
+`v0.4.0-abi.7` 发布前，manifest 继续指向这个已验证的资产，不会提前引用 404 URL。
 在 Xcode 的 **File → Add Package Dependencies…** 中使用：
 
 ```text
@@ -84,8 +84,8 @@ https://github.com/jacklv-coder/ish-arm64-pkg
 请选择明确包含 `libIshKernel.xcframework.zip`、对应源码归档，并且 manifest URL/checksum
 与同一标签匹配的版本。业务工程不需要安装 Meson、Zig 或 LLVM。
 
-`v0.4.0-abi.6` 补全 Swift 参数封送和 stdin close 对原始 SPAWN deadline 的复用；
-它不实现原生 Agent Loop，也不会
+`v0.4.0-abi.7` 新增无 shell、无 check-then-rename 竞争窗口的 guest 原子重命名，
+并把目标已存在映射为 Swift 类型化错误；它不实现原生 Agent Loop，也不会
 在 App 内安装 Codex CLI。Node.js/npm 如有需要仍由
 RootFS/guest 包管理流程选择，不属于 runtime 的强制依赖。
 
@@ -106,6 +106,15 @@ let result = try instance.runOneshot(
     .init(argv: ["/bin/echo", "hello"], timeout: 10)
 )
 print(String(decoding: result.stdoutData, as: UTF8.self))
+
+do {
+    try instance.renameNoReplace(
+        from: "/workspace/draft.txt",
+        to: "/workspace/final.txt"
+    )
+} catch IshFilesystemError.destinationExists {
+    // 目标保持原样；调用方可以提示用户换一个名称。
+}
 ```
 
 `IshSpawnOptions.timeout` 同时适用于 `runOneshot` 与 streaming `spawn`。有限超时从

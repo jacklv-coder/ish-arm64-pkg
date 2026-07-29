@@ -38,6 +38,23 @@ public enum IshError: Error, CustomStringConvertible {
     }
 }
 
+public enum IshFilesystemError: Error, Equatable, CustomStringConvertible {
+    /// The destination existed at the atomic rename point. Neither path was
+    /// replaced, and the source remains unchanged.
+    case destinationExists
+    /// A positive Linux guest errno returned by the filesystem operation.
+    case guestErrno(Int32)
+
+    public var description: String {
+        switch self {
+        case .destinationExists:
+            return "The destination already exists."
+        case .guestErrno(let value):
+            return "Guest filesystem operation failed with Linux errno \(value)."
+        }
+    }
+}
+
 public struct IshSpawnOptions {
     public var argv: [String]
     public var cwd: String?
@@ -106,6 +123,7 @@ public enum IshSessionEvent {
 // The C header exposes ISH_OK / ISH_ERR_* as an unnamed enum and
 // ISH_STREAM_* as #define ints; both arrive as Int32 in Swift.
 private let ishOK: Int32                = ISH_OK.rawValue
+private let ishUnsupported: Int32       = -22
 private let ishErrNotRunning: Int32     = ISH_ERR_NOT_RUNNING.rawValue
 private let ishErrAlreadyBooted: Int32  = ISH_ERR_ALREADY_BOOTED.rawValue
 private let ishErrNoSession: Int32      = ISH_ERR_NO_SESSION.rawValue
@@ -188,6 +206,9 @@ struct IshLifecycleNativeCalls: @unchecked Sendable {
                 UnsafeMutablePointer<ish_embed_spawn_opts_t>,
                 IshSpawnTimeoutBudget) throws ->
         (result: Int32, session: OpaquePointer?)
+    let renameNoReplace: (OpaquePointer, UnsafePointer<CChar>,
+                          UnsafePointer<CChar>, UInt32,
+                          UnsafeMutablePointer<Int32>) -> Int32
     let sessionClose: (OpaquePointer) -> Void
     let freeBuffer: (UnsafeMutablePointer<UInt8>) -> Void
 
@@ -215,6 +236,12 @@ struct IshLifecycleNativeCalls: @unchecked Sendable {
             var session: OpaquePointer? = nil
             let result = ish_embed_spawn(instance, opts, &session)
             return (result, session)
+        },
+        renameNoReplace: { instance, source, destination, timeoutMs,
+                           guestErrno in
+            ish_embed_swift_rename_noreplace(
+                instance, source, destination, timeoutMs, guestErrno
+            )
         },
         sessionClose: { session in
             ish_embed_session_close(session)
@@ -333,6 +360,52 @@ public final class IshInstance: @unchecked Sendable {
                 stderrData: err,
                 timedOut: res.timed_out != 0
             )
+        }
+    }
+
+    /// Atomically renames a guest file or directory without replacing an
+    /// existing destination. Both paths are absolute inside the Linux guest.
+    /// This operation does not invoke a shell and does not perform a racy
+    /// existence check before rename.
+    public func renameNoReplace(
+        from source: String,
+        to destination: String,
+        timeout: TimeInterval? = 5
+    ) throws {
+        guard source.first == "/", source.count > 1,
+              destination.first == "/", destination.count > 1,
+              !source.utf8.contains(0), !destination.utf8.contains(0) else {
+            throw IshError.from(ishErrInvalidArg)
+        }
+        let timeoutBudget = try IshSpawnTimeoutBudget(
+            timeout: timeout,
+            startedAt: ProcessInfo.processInfo.systemUptime
+        )
+        let lease = try callGate.acquireCall()
+        defer { lease.release() }
+        let timeoutMs = try timeoutBudget.remainingMilliseconds(
+            at: ProcessInfo.processInfo.systemUptime
+        )
+        var guestErrno: Int32 = 0
+        let rc = source.withCString { sourceC in
+            destination.withCString { destinationC in
+                nativeCalls.renameNoReplace(
+                    lease.raw, sourceC, destinationC, timeoutMs, &guestErrno
+                )
+            }
+        }
+        if rc == ishUnsupported {
+            throw IshError.raw(
+                rc,
+                "Atomic no-replace rename requires IshEmbed v0.4.0-abi.7 or newer."
+            )
+        }
+        if rc != ishOK { throw IshError.from(rc) }
+        if guestErrno == 17 {
+            throw IshFilesystemError.destinationExists
+        }
+        if guestErrno != 0 {
+            throw IshFilesystemError.guestErrno(guestErrno)
         }
     }
 
