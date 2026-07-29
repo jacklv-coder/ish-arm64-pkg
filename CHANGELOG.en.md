@@ -20,7 +20,29 @@ Chinese is the primary changelog and this file is its maintained English mirror.
   explicitly unapproved for distribution without changing the XCFramework
   Release's RootFS exclusion policy.
 
-## v0.4.0-abi.6 (planned Stage1 maintenance prerelease)
+## v0.4.0-abi.7 (planned Stage1 maintenance prerelease)
+
+This is a compatibility maintenance release after `v0.4.0-abi.6`. It remains a
+prerelease and is **not stable v0.4.0**.
+
+- The pinned iSH fork adds `RENAME_NOREPLACE` syscall semantics, mapping them to
+  `renameatx_np(RENAME_EXCL)` in the Darwin fakefs backend and `renameat2` on a
+  Linux host. An existing destination is never replaced, without a racy
+  check-then-move sequence.
+- The public C API adds `ish_embed_rename_noreplace`. It executes the atomic
+  rename through the content-addressed guest supervisor selected at boot and
+  returns guest errno in a bounded decimal record; malformed protocol output or
+  helper failure fails closed.
+- The Swift API adds `IshInstance.renameNoReplace(from:to:timeout:)` and
+  `IshFilesystemError`. An existing destination maps to `.destinationExists`.
+  While source temporarily links `v0.4.0-abi.6`, a weak fallback reports
+  unsupported instead of producing a missing symbol.
+- The public C ABI version remains 1 and wire protocol remains v4; the new
+  function symbol is backward-compatible and additive. RootFS remains outside
+  the Release. This version does not implement a native Agent Loop or install
+  Codex CLI.
+
+## v0.4.0-abi.6 (published Stage1 maintenance prerelease)
 
 This is a compatibility maintenance release after `v0.4.0-abi.5`. It remains a
 prerelease and is **not stable v0.4.0**.

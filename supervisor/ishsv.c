@@ -51,6 +51,7 @@
 #include <sys/stat.h>
 #include <sys/mount.h>
 #if defined(__linux__)
+#include <sys/syscall.h>
 #include <sys/vfs.h>
 #endif
 #if defined(__linux__)
@@ -136,6 +137,7 @@ extern int (*ishsv_test_waitid_hook)(idtype_t, id_t, siginfo_t *, int);
 extern pid_t (*ishsv_test_waitpid_hook)(pid_t, int *, int);
 extern int (*ishsv_test_kill_hook)(pid_t, int);
 extern pid_t (*ishsv_test_tcgetpgrp_hook)(int);
+extern int (*ishsv_test_rename_noreplace_hook)(const char *, const char *);
 #endif
 
 static int supervisor_waitid(idtype_t idtype, id_t id, siginfo_t *info,
@@ -248,6 +250,40 @@ static int read_full(int fd, void *buf, size_t len) {
         if (r == 0) return -2; /* EOF */
         p += r; len -= (size_t)r;
     }
+    return 0;
+}
+
+/* Private process mode used by the host ABI. It deliberately reports the
+ * guest errno as a tiny decimal record on stdout so the parent supervisor can
+ * carry it through the ordinary bounded oneshot path. */
+static int rename_noreplace_guest(const char *source, const char *destination) {
+#ifdef ISH_SUPERVISOR_TESTING
+    if (ishsv_test_rename_noreplace_hook)
+        return ishsv_test_rename_noreplace_hook(source, destination);
+#endif
+#if defined(__linux__) && defined(SYS_renameat2)
+    return (int)syscall(SYS_renameat2, AT_FDCWD, source,
+                        AT_FDCWD, destination, 1u);
+#else
+    (void)source;
+    (void)destination;
+    errno = ENOSYS;
+    return -1;
+#endif
+}
+
+static int run_rename_noreplace_helper(int argc, char **argv) {
+    if (argc != 4 || !argv || strcmp(argv[1], "--rename-noreplace") != 0 ||
+        !argv[2] || !argv[3])
+        return 64;
+    int guest_errno = 0;
+    if (rename_noreplace_guest(argv[2], argv[3]) < 0)
+        guest_errno = errno > 0 ? errno : EIO;
+    char record[32];
+    int len = snprintf(record, sizeof(record), "%d\n", guest_errno);
+    if (len <= 0 || (size_t)len >= sizeof(record) ||
+        write_full(STDOUT_FILENO, record, (size_t)len) < 0)
+        return 74;
     return 0;
 }
 
@@ -1810,7 +1846,9 @@ static int handshake(void) {
     return emit_frame(ISH_FT_HELLO_ACK, 0, 0, ack, sizeof(ack));
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    if (argc > 1)
+        return run_rename_noreplace_helper(argc, argv);
     g_instance_fail_closed = 0;
     /* PID 1: become a child subreaper just in case (Linux >= 3.4) */
 #if defined(__linux__) && defined(PR_SET_CHILD_SUBREAPER)

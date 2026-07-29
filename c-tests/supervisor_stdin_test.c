@@ -16,6 +16,7 @@ int (*ishsv_test_waitid_hook)(idtype_t, id_t, siginfo_t *, int);
 pid_t (*ishsv_test_waitpid_hook)(pid_t, int *, int);
 int (*ishsv_test_kill_hook)(pid_t, int);
 pid_t (*ishsv_test_tcgetpgrp_hook)(int);
+int (*ishsv_test_rename_noreplace_hook)(const char *, const char *);
 #if defined(__linux__)
 int (*ishsv_test_adopted_scan_hook)(struct proc_child_identity *);
 #endif
@@ -51,6 +52,59 @@ static void read_expected_frame(int fd, uint8_t expected_type,
     if (len > 0) CHECK(read_full(fd, payload, len) == 0);
 }
 
+static int rename_hook_result;
+static int rename_hook_errno;
+static char rename_hook_source[128];
+static char rename_hook_destination[128];
+
+static int capture_rename_noreplace(const char *source,
+                                    const char *destination) {
+    snprintf(rename_hook_source, sizeof(rename_hook_source), "%s", source);
+    snprintf(rename_hook_destination, sizeof(rename_hook_destination), "%s",
+             destination);
+    errno = rename_hook_errno;
+    return rename_hook_result;
+}
+
+static void run_rename_helper_case(int result, int error,
+                                   const char *expected_record) {
+    int output[2];
+    CHECK(pipe(output) == 0);
+    int saved_stdout = dup(STDOUT_FILENO);
+    CHECK(saved_stdout >= 0);
+    CHECK(dup2(output[1], STDOUT_FILENO) == STDOUT_FILENO);
+    close(output[1]);
+
+    rename_hook_result = result;
+    rename_hook_errno = error;
+    rename_hook_source[0] = '\0';
+    rename_hook_destination[0] = '\0';
+    ishsv_test_rename_noreplace_hook = capture_rename_noreplace;
+    char *argv[] = {
+        "ishsv", "--rename-noreplace", "/workspace/source",
+        "/workspace/destination", NULL,
+    };
+    CHECK(run_rename_noreplace_helper(4, argv) == 0);
+    CHECK(dup2(saved_stdout, STDOUT_FILENO) == STDOUT_FILENO);
+    close(saved_stdout);
+
+    char record[32] = {0};
+    ssize_t count = read(output[0], record, sizeof(record));
+    close(output[0]);
+    CHECK(count == (ssize_t)strlen(expected_record));
+    CHECK(memcmp(record, expected_record, (size_t)count) == 0);
+    CHECK(strcmp(rename_hook_source, "/workspace/source") == 0);
+    CHECK(strcmp(rename_hook_destination, "/workspace/destination") == 0);
+    ishsv_test_rename_noreplace_hook = NULL;
+}
+
+static void test_rename_noreplace_helper(void) {
+    run_rename_helper_case(0, 0, "0\n");
+    run_rename_helper_case(-1, EEXIST, "17\n");
+    char *bad_argv[] = {"ishsv", "--rename-noreplace", "/source", NULL};
+    CHECK(run_rename_noreplace_helper(3, bad_argv) == 64);
+}
+
 /* Exercise the production main loop across real host pipes. PID 1 starts
  * before the host writer in the app, so deliberately delay HELLO and prove
  * the blocking handshake does not mistake EAGAIN for EOF/failure. */
@@ -71,7 +125,8 @@ static void test_delayed_hello_full_main(void) {
         close(null_fd);
         close(control[0]);
         close(events[1]);
-        _exit(ishsv_program_main());
+        char *argv[] = {"ishsv", NULL};
+        _exit(ishsv_program_main(1, argv));
     }
 
     close(control[0]);
@@ -168,7 +223,8 @@ static void test_output_flood_does_not_starve_control(void) {
         close(null_fd);
         close(control[0]);
         close(events[1]);
-        _exit(ishsv_program_main());
+        char *argv[] = {"ishsv", NULL};
+        _exit(ishsv_program_main(1, argv));
     }
 
     close(control[0]);
@@ -1441,6 +1497,7 @@ static void test_setsid_double_fork_escape_is_cleaned_before_exit(void) {
 
 int main(void) {
     signal(SIGPIPE, SIG_IGN);
+    test_rename_noreplace_helper();
     test_delayed_hello_full_main();
     test_output_flood_does_not_starve_control();
     test_spawn_parser_rejects_wrapping_lengths();

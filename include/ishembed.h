@@ -104,6 +104,7 @@ typedef enum {
     ISH_ERR_BUSY            = -19, /* operation cannot proceed while state busy */
     ISH_ERR_SUPERVISOR_INSTALL = -20, /* bundled PID 1 install/verification failed */
     ISH_ERR_CONTROL_LIMIT   = -21, /* host-to-guest control queue ceiling reached */
+    ISH_ERR_UNSUPPORTED     = -22, /* feature is unavailable in the linked native binary */
     ISH_ERR_INTERNAL        = -99,
 } ish_embed_status_t;
 
@@ -175,6 +176,22 @@ typedef struct ish_embed_oneshot_result {
 int ish_embed_run_oneshot(ish_embed_instance_t *inst,
                           const ish_embed_spawn_opts_t *opts,
                           ish_embed_oneshot_result_t *out_result);
+
+/* Atomically rename one guest-absolute path without replacing an existing
+ * destination. The operation runs inside the guest through the exact
+ * supervisor selected at boot; it does not invoke a shell or compose a
+ * check-then-rename sequence.
+ *
+ * Returns an ISH_* transport/lifecycle status. On ISH_OK,
+ * *out_guest_errno is 0 for success or a positive Linux errno (for example,
+ * EEXIST=17 when destination already exists). timeout_ms uses the same
+ * API-entry deadline semantics as run_oneshot; 0 retains the unbounded legacy
+ * behavior. source and destination must be non-empty guest-absolute paths. */
+int ish_embed_rename_noreplace(ish_embed_instance_t *inst,
+                               const char *source,
+                               const char *destination,
+                               uint32_t timeout_ms,
+                               int32_t *out_guest_errno);
 
 void ish_embed_free(void *p);
 

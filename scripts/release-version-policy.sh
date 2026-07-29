@@ -5,7 +5,7 @@
 # existing tag and accidentally creating a stable tag before Stage2 is
 # integrated and separately authorized.
 ish_release_stage1_version_allowed() {
-    [[ "$1" == "v0.4.0-abi.6" ]]
+    [[ "$1" == "v0.4.0-abi.7" ]]
 }
 
 # Call only after the release entry point has validated strict SemVer.
@@ -27,23 +27,25 @@ ish_release_abi_transition_notes() {
 
 这不是稳定 v0.4。本预发布交付 native lifecycle 基础：session
 retain/release、可等待 kernel thread、soft-halt 与内部精确匹配 wire protocol v4。
-本维护版本从 Swift API 入口建立绝对 deadline，扣除 argv/env/cwd/chroot 封送耗时后
-将剩余时间交给 native；有限 streaming session 会保留原始 SPAWN deadline，并让 stdin
-close 在控制队列接纳时复用它。过期会返回 timeout，不会重新开始一段等待；active stdin
-write 持有顺序锁时 stdin close 仍会立即返回 busy。
-公开 C ABI 版本仍为 1。Swift 源仍保持 v0.3.3 ABI 兼容且不调用 retain/release；
+本维护版本新增无 shell、无 check-then-rename 竞争窗口的 guest 原子重命名能力。
+`ish_embed_rename_noreplace` 通过与当前 runtime 精确匹配的内容寻址 supervisor 执行
+Linux `renameat2(RENAME_NOREPLACE)`；目标已存在时返回 guest `EEXIST`，不会覆盖文件。
+Swift `IshInstance.renameNoReplace` 提供对应类型化错误，并在链接旧 native binary 时
+明确返回 unsupported。
+公开 C ABI 版本仍为 1；这是向后兼容的新增符号。Swift 源仍不调用 retain/release；
 完整 Swift lifecycle、类型化状态与 Terminal/VT 改造将在 Stage2 交付。
 本 Release 不包含 RootFS，发布脚本也不会上传 RootFS。
 
 This is not stable v0.4. It delivers the native lifecycle foundation: session
 retain/release, a joinable kernel thread, soft-halt, and internal exact-match
-wire protocol v4. This maintenance release establishes an absolute deadline at
-Swift API entry, subtracts argv/env/cwd/chroot marshalling, and passes only the
-remainder to native. Finite streaming sessions retain the original SPAWN
-deadline and reuse it for stdin-close control-queue admission, returning timeout
-instead of starting another wait; stdin close still reports busy while an
-active write owns its order gate. The public C ABI remains
-version 1. Swift source remains v0.3.3-ABI compatible and does not call
+wire protocol v4. This maintenance release adds guest-atomic rename without a
+shell or a check-then-rename race. `ish_embed_rename_noreplace` invokes Linux
+`renameat2(RENAME_NOREPLACE)` through the content-addressed supervisor that
+exactly matches the running runtime. An existing destination returns guest
+`EEXIST` and is never replaced. Swift `IshInstance.renameNoReplace` exposes a
+typed error and reports unsupported when linked to an older native binary. The
+public C ABI remains version 1; the new symbol is additive and backward
+compatible. Swift source still does not call
 retain/release; the complete Swift
 lifecycle, typed statuses, and Terminal/VT changes remain Stage2. This Release
 does not contain a RootFS, and the release script never uploads one.

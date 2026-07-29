@@ -3,6 +3,8 @@ import XCTest
 import CIshEmbed
 @testable import IshEmbed
 
+private let ishUnsupported: Int32 = -22
+
 private final class LockedResults: @unchecked Sendable {
     private let lock = NSLock()
     private var values: [Int32]
@@ -56,6 +58,8 @@ private final class LifecycleNativeHarness: @unchecked Sendable {
         (UnsafeMutablePointer<ish_embed_oneshot_result_t>) -> Int32
     private let timeoutObservedBody: (UInt32) -> Void
     private let spawnTimeoutObservedBody: (UInt32) -> Void
+    private let renameBody:
+        (String, String, UInt32, UnsafeMutablePointer<Int32>) -> Int32
     private let sessionCloseBody: () -> Void
     private let bufferFreedBody: () -> Void
     private let lock = NSLock()
@@ -63,6 +67,7 @@ private final class LifecycleNativeHarness: @unchecked Sendable {
     private var shutdownCalls = 0
     private var oneshotCalls = 0
     private var spawnCalls = 0
+    private var renameCalls = 0
     private var sessionCloseCalls = 0
     private var freeBufferCalls = 0
     private var oneshotResultWasZeroed = true
@@ -75,6 +80,10 @@ private final class LifecycleNativeHarness: @unchecked Sendable {
             },
          timeoutObservedBody: @escaping (UInt32) -> Void = { _ in },
          spawnTimeoutObservedBody: @escaping (UInt32) -> Void = { _ in },
+         renameBody: @escaping
+            (String, String, UInt32, UnsafeMutablePointer<Int32>) -> Int32 = {
+                _, _, _, _ in ishUnsupported
+            },
          sessionCloseBody: @escaping () -> Void = {},
          bufferFreedBody: @escaping () -> Void = {}) {
         self.spawnResult = spawnResult
@@ -82,6 +91,7 @@ private final class LifecycleNativeHarness: @unchecked Sendable {
         self.oneshotBody = oneshotBody
         self.timeoutObservedBody = timeoutObservedBody
         self.spawnTimeoutObservedBody = spawnTimeoutObservedBody
+        self.renameBody = renameBody
         self.sessionCloseBody = sessionCloseBody
         self.bufferFreedBody = bufferFreedBody
     }
@@ -135,6 +145,18 @@ private final class LifecycleNativeHarness: @unchecked Sendable {
                 return (spawnResult,
                         spawnResult == 0 ? sessionRaw : nil)
             },
+            renameNoReplace: { [self] _, source, destination, timeoutMs,
+                               guestErrno in
+                lock.lock()
+                renameCalls += 1
+                lock.unlock()
+                return renameBody(
+                    String(cString: source),
+                    String(cString: destination),
+                    timeoutMs,
+                    guestErrno
+                )
+            },
             sessionClose: { [self] _ in
                 lock.lock()
                 sessionCloseCalls += 1
@@ -151,10 +173,11 @@ private final class LifecycleNativeHarness: @unchecked Sendable {
     }
 
     func counts() -> (boot: Int, shutdown: Int, oneshot: Int, spawn: Int,
+                      rename: Int,
                       close: Int, freeBuffer: Int, resultWasZeroed: Bool) {
         lock.lock()
         defer { lock.unlock() }
-        return (bootCalls, shutdownCalls, oneshotCalls, spawnCalls,
+        return (bootCalls, shutdownCalls, oneshotCalls, spawnCalls, renameCalls,
                 sessionCloseCalls, freeBufferCalls,
                 oneshotResultWasZeroed)
     }
@@ -251,6 +274,94 @@ final class IshEmbedTests: XCTestCase {
 
         try instance.shutdown()
         XCTAssertEqual(native.counts().shutdown, 1)
+    }
+
+    func testAtomicRenameMapsGuestResultsAndValidatesPaths() throws {
+        var observed: [(String, String, UInt32)] = []
+        let native = LifecycleNativeHarness(
+            renameBody: { source, destination, timeoutMs, guestErrno in
+                observed.append((source, destination, timeoutMs))
+                guestErrno.pointee =
+                    destination.hasSuffix("exists") ? 17 :
+                    destination.hasSuffix("denied") ? 13 : 0
+                return 0
+            })
+        let instance = IshInstance(nativeCalls: native.nativeCalls())
+        try instance.boot(.init(rootfsPath: "/unused-test-rootfs"))
+
+        try instance.renameNoReplace(
+            from: "/workspace/source",
+            to: "/workspace/renamed"
+        )
+        XCTAssertThrowsError(
+            try instance.renameNoReplace(
+                from: "/workspace/source",
+                to: "/workspace/exists"
+            )
+        ) { error in
+            XCTAssertEqual(error as? IshFilesystemError, .destinationExists)
+        }
+        XCTAssertThrowsError(
+            try instance.renameNoReplace(
+                from: "/workspace/source",
+                to: "/workspace/denied"
+            )
+        ) { error in
+            XCTAssertEqual(error as? IshFilesystemError, .guestErrno(13))
+        }
+        XCTAssertThrowsError(
+            try instance.renameNoReplace(from: "relative", to: "/valid")
+        ) { error in
+            XCTAssertEqual(ishErrorCode(error), ISH_ERR_INVALID_ARG.rawValue)
+        }
+
+        XCTAssertEqual(observed.count, 3)
+        XCTAssertEqual(observed.first?.0, "/workspace/source")
+        XCTAssertEqual(observed.first?.1, "/workspace/renamed")
+        XCTAssertTrue(observed.allSatisfy { $0.2 > 0 && $0.2 <= 5_000 })
+        XCTAssertEqual(native.counts().rename, 3)
+        try instance.shutdown()
+    }
+
+    func testAtomicRenameReportsOlderNativeBinaryClearly() throws {
+        let native = LifecycleNativeHarness()
+        let instance = IshInstance(nativeCalls: native.nativeCalls())
+        try instance.boot(.init(rootfsPath: "/unused-test-rootfs"))
+
+        XCTAssertThrowsError(
+            try instance.renameNoReplace(from: "/source", to: "/destination")
+        ) { error in
+            XCTAssertEqual(ishErrorCode(error), ishUnsupported)
+            XCTAssertTrue(String(describing: error).contains("abi.7"))
+        }
+        try instance.shutdown()
+    }
+
+    func testAtomicRenameLeaseBlocksConcurrentShutdown() throws {
+        let entered = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        let finished = DispatchSemaphore(value: 0)
+        let native = LifecycleNativeHarness(
+            renameBody: { _, _, _, guestErrno in
+                entered.signal()
+                release.wait()
+                guestErrno.pointee = 0
+                return 0
+            })
+        let instance = IshInstance(nativeCalls: native.nativeCalls())
+        try instance.boot(.init(rootfsPath: "/unused-test-rootfs"))
+
+        DispatchQueue.global().async {
+            try? instance.renameNoReplace(from: "/source", to: "/destination")
+            finished.signal()
+        }
+        XCTAssertEqual(entered.wait(timeout: .now() + 1), .success)
+        XCTAssertThrowsError(try instance.shutdown()) { error in
+            XCTAssertEqual(ishErrorCode(error), ISH_ERR_BUSY.rawValue)
+        }
+        release.signal()
+        XCTAssertEqual(finished.wait(timeout: .now() + 1), .success)
+        try instance.shutdown()
     }
 
     func testFailedSpawnReleasesInstanceLease() throws {

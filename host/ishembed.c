@@ -201,6 +201,10 @@ struct ish_embed_instance {
     /* Private duplicate of the requested supervisor-log sink. A negative fd
      * means logs are drained and discarded. */
     int             kernel_log_fd;
+    /* Immutable guest path of the exact supervisor selected and executed at
+     * boot. Filesystem helpers spawn this same verified binary rather than a
+     * RootFS-owned compatibility path. */
+    char           *supervisor_guest_path;
 
     /* hello handshake */
     int             hello_acked;
@@ -1311,6 +1315,8 @@ int ish_embed_boot(const ish_embed_boot_opts_t *opts,
     size_t off = 0;
     size_t L = strlen(sup);
     if (L + 2 > sizeof(argv_packed)) { err = ISH_ERR_INVALID_ARG; goto fail; }
+    inst->supervisor_guest_path = strdup(sup);
+    if (!inst->supervisor_guest_path) { err = ISH_ERR_OOM; goto fail; }
     memcpy(argv_packed, sup, L); argv_packed[L] = 0; off = L + 1;
     argv_packed[off] = 0;
 
@@ -1436,6 +1442,7 @@ fail:;
     close_fd_slot(&inst->kernel_log_fd);
     if (exit_hook_registered) ish_ffi_register_exit_hook(NULL, NULL);
     destroy_instance_primitives(inst);
+    free(inst->supervisor_guest_path);
     free(inst);
     pthread_mutex_unlock(&g_instance_lock);
     return saved;
@@ -2229,6 +2236,98 @@ oneshot_done:
     return ISH_OK;
 }
 
+static int parse_guest_errno_output(const uint8_t *buf, size_t len,
+                                    int32_t *out_guest_errno) {
+    if (!buf || !out_guest_errno || len < 2 || len > 11 ||
+        buf[len - 1] != '\n')
+        return ISH_ERR_PROTOCOL;
+    uint32_t value = 0;
+    for (size_t i = 0; i + 1 < len; i++) {
+        uint8_t ch = buf[i];
+        if (ch < '0' || ch > '9') return ISH_ERR_PROTOCOL;
+        uint32_t digit = (uint32_t)(ch - '0');
+        if (value > (uint32_t)INT32_MAX / 10u ||
+            (value == (uint32_t)INT32_MAX / 10u &&
+             digit > (uint32_t)INT32_MAX % 10u))
+            return ISH_ERR_PROTOCOL;
+        value = value * 10u + digit;
+    }
+    *out_guest_errno = (int32_t)value;
+    return ISH_OK;
+}
+
+int ish_embed_rename_noreplace(ish_embed_instance_t *inst,
+                               const char *source,
+                               const char *destination,
+                               uint32_t timeout_ms,
+                               int32_t *out_guest_errno) {
+    if (!inst || !source || !destination || !out_guest_errno ||
+        source[0] != '/' || source[1] == '\0' ||
+        destination[0] != '/' || destination[1] == '\0')
+        return ISH_ERR_INVALID_ARG;
+    *out_guest_errno = 0;
+
+    uint64_t deadline = timeout_ms > 0 ? now_ms() + timeout_ms : 0;
+    int gate = instance_call_begin_until(inst, deadline);
+    if (gate != ISH_OK) return gate;
+    char *helper_path = inst->supervisor_guest_path
+        ? strdup(inst->supervisor_guest_path) : NULL;
+    if (!helper_path) {
+        instance_call_end(inst);
+        return ISH_ERR_OOM;
+    }
+
+    uint32_t remaining_ms = 0;
+    if (deadline != 0) {
+        uint64_t now = now_ms();
+        if (now >= deadline) {
+            free(helper_path);
+            instance_call_end(inst);
+            return ISH_ERR_TIMEOUT;
+        }
+        uint64_t remaining = deadline - now;
+        remaining_ms = remaining > UINT32_MAX
+            ? UINT32_MAX : (uint32_t)remaining;
+        if (remaining_ms == 0) {
+            free(helper_path);
+            instance_call_end(inst);
+            return ISH_ERR_TIMEOUT;
+        }
+    }
+
+    const char *argv[] = {
+        helper_path,
+        "--rename-noreplace",
+        source,
+        destination,
+        NULL,
+    };
+    ish_embed_spawn_opts_t opts = {0};
+    opts.argv = argv;
+    opts.cwd = "/";
+    opts.timeout_ms = remaining_ms;
+    ish_embed_oneshot_result_t result;
+    int rc = ish_embed_run_oneshot(inst, &opts, &result);
+    free(helper_path);
+    if (rc != ISH_OK) {
+        instance_call_end(inst);
+        return rc;
+    }
+
+    if (result.timed_out) {
+        rc = ISH_ERR_TIMEOUT;
+    } else if (result.signal != 0 || result.exit_code != 0) {
+        rc = ISH_ERR_SUPERVISOR;
+    } else {
+        rc = parse_guest_errno_output(result.stdout_buf, result.stdout_len,
+                                      out_guest_errno);
+    }
+    ish_embed_free(result.stdout_buf);
+    ish_embed_free(result.stderr_buf);
+    instance_call_end(inst);
+    return rc;
+}
+
 void ish_embed_free(void *p) { free(p); }
 
 int ish_embed_setup_vm_root(ish_embed_instance_t *inst, const char *vm_root) {
@@ -2312,6 +2411,7 @@ int ish_embed_shutdown(ish_embed_instance_t *inst, uint32_t grace_ms) {
     destroy_instance_primitives(inst);
 
     g_instance = NULL;
+    free(inst->supervisor_guest_path);
     free(inst);
     pthread_mutex_unlock(&g_instance_lock);
     return ISH_OK;
@@ -2345,6 +2445,7 @@ const char *ish_embed_strerror(int s) {
         case ISH_ERR_BUSY: return "operation cannot proceed while runtime state is busy";
         case ISH_ERR_SUPERVISOR_INSTALL: return "bundled supervisor installation failed";
         case ISH_ERR_CONTROL_LIMIT: return "host control queue limit reached";
+        case ISH_ERR_UNSUPPORTED: return "feature unavailable in linked native binary";
         case ISH_ERR_INTERNAL: return "internal error";
         default: return "unknown";
     }
