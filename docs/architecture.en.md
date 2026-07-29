@@ -280,6 +280,10 @@ stdin write/close reuses it for the ordering lock and writer gate; expiry return
 `ISH_ERR_TIMEOUT` without starting a fresh wait. Stdin close returns
 `ISH_ERR_BUSY` rather than waiting behind an active stdin write; authoritative
 `EXITED` still confirms termination.
+The per-call stdin write/close APIs let a host admit bounded chunks with a
+shorter deadline. That deadline never extends past the original SPAWN deadline,
+and expiry publishes no late frame, allowing output drain and cancellation
+checks between chunks.
 
 Stage1 does not deliver new typed Swift statuses or bounded Terminal callback
 delivery. Do not describe native backlog protection as if the Stage2 Swift

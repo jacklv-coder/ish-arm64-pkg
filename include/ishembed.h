@@ -244,6 +244,16 @@ int ish_embed_session_read(ish_embed_session_t *s,
 int ish_embed_session_write(ish_embed_session_t *s,
                             const uint8_t *buf, size_t len);
 
+/* Queue stdin bytes with a deadline relative to this API entry. timeout_ms
+ * must be nonzero. The effective deadline is the earlier of this call's
+ * deadline and the session's original finite SPAWN deadline, if any. Unlike
+ * the legacy write entry point, this remains bounded even for a session
+ * spawned with timeout_ms == 0. A timeout may follow successful admission of
+ * an earlier frame from the same call. */
+int ish_embed_session_write_timeout(ish_embed_session_t *s,
+                                    const uint8_t *buf, size_t len,
+                                    uint32_t timeout_ms);
+
 /* Outbound operations on one retained session are synchronized with close.
  * For legacy zero-timeout sessions, a successful write, signal, resize,
  * terminate, or stdin close is completely written before SESSION_CLOSE. For a
@@ -275,6 +285,13 @@ int ish_embed_session_terminate(ish_embed_session_t *s, uint32_t grace_ms);
  * original streaming-SPAWN admission deadline; expiry returns ISH_ERR_TIMEOUT
  * without publishing a late STDIN_CLOSE frame. */
 int ish_embed_session_close_stdin(ish_embed_session_t *s);
+
+/* Close stdin with a nonzero deadline relative to this API entry. The
+ * effective deadline is the earlier of this call's deadline and the session's
+ * original finite SPAWN deadline. A timeout does not publish a late EOF and
+ * leaves stdin open so the caller can retry or terminate the session. */
+int ish_embed_session_close_stdin_timeout(ish_embed_session_t *s,
+                                          uint32_t timeout_ms);
 
 /* Close the session and consume its owner reference. If the tracked command is
  * still running, the supervisor force-closes its transport, terminates the

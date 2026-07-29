@@ -213,6 +213,9 @@ SPAWN 队列接纳。有限 streaming session 的 SPAWN、stdin write/close 与 
 绝对 deadline，stdin write/close 复用同一期限取得顺序锁和 writer gate，过期时返回
 `ISH_ERR_TIMEOUT` 而不会重新开始等待。stdin close 遇到 active stdin write 时返回
 `ISH_ERR_BUSY` 而不是等待；终止完成仍以 `EXITED` 为准。
+新增的按调用 stdin write/close API 允许上层用更短 deadline 分块接纳；其 deadline
+不会晚于 session 原始 SPAWN deadline，超时后不发布 late frame，便于在块间排空输出与
+检查取消。
 
 Stage1 Swift 尚未交付新的 typed status 和 Terminal callback 有界投递；不能把 native
 积压上限误写成 Stage2 Swift callback 策略已完成。

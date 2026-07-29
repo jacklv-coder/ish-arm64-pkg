@@ -26,7 +26,7 @@ git status --short
 来源、大小和 SHA-256。没有这组信息，后续日志可能来自不同状态。
 
 当前正确组合是：C ABI 1、wire v4、Swift 不调用 retain/release、manifest 指向已公开
-的 `v0.4.0-abi.7`。发布 `v0.4.0-abi.8` 后，只有 manifest URL/checksum 应切到维护资产。
+的 `v0.4.0-abi.8`。发布 `v0.4.0-abi.9` 后，只有 manifest URL/checksum 应切到维护资产。
 
 ## 链接缺少 retain/release 或其他符号
 
@@ -44,20 +44,20 @@ nm -gU path/to/libIshKernel.a | awk '{print $NF}' | sort -u \
   旧 ABI 兼容 Swift，而不是扩大本次维护发布范围。
 - 如果检查的是本地 Stage1 XCFramework 而符号缺失，说明构建用了旧 commit、旧 gitlink
   或缓存；用隔离 build 路径重建。
-- 如果 `v0.4.0-abi.8` 已发布但 manifest 仍是 `v0.4.0-abi.7`，检查 release
+- 如果 `v0.4.0-abi.9` 已发布但 manifest 仍是 `v0.4.0-abi.8`，检查 release
   commit/default branch fast-forward 是否完成；不要手工猜 checksum。
 
 ## Package.swift 看起来“还没更新”
 
-维护 PR 合入到 Release 发布前，manifest 固定 `v0.4.0-abi.7` 是预期状态。发布脚本先
+维护 PR 合入到 Release 发布前，manifest 固定 `v0.4.0-abi.8` 是预期状态。发布脚本先
 从合入 commit 重建/验证资产，再创建只更新 manifest 的 release commit，先公开并校验
 资产，最后 fast-forward 默认分支。这样默认分支不会引用 404 URL。
 
-只有已经确认 `v0.4.0-abi.8` Release 公开后，manifest 仍旧才是异常。此时检查：
+只有已经确认 `v0.4.0-abi.9` Release 公开后，manifest 仍旧才是异常。此时检查：
 
 ```sh
-gh release view v0.4.0-abi.8 --repo jacklv-coder/ish-arm64-pkg
-git ls-remote --tags origin refs/tags/v0.4.0-abi.8
+gh release view v0.4.0-abi.9 --repo jacklv-coder/ish-arm64-pkg
+git ls-remote --tags origin refs/tags/v0.4.0-abi.9
 git fetch origin
 git log --oneline --decorate -5 origin/main
 ```
@@ -95,8 +95,9 @@ Linux `new_utsname` 65 字节字段宽度的宿主 hostname 触发。
   屏蔽，使 guest signal 能打断阻塞中的宿主 syscall。
 - 已发布的 `v0.4.0-abi.5` 在此基础上增加有限 streaming control-path deadline。
   已发布的 `v0.4.0-abi.6` 补全 Swift 参数封送和 stdin close 对原始 SPAWN deadline
-  的复用；已发布的 `v0.4.0-abi.7` 新增 guest 原子 no-replace rename；待发布的
-  `v0.4.0-abi.8` 让有限 session 的 stdin write/close 共享同一绝对 deadline；这些版本
+  的复用；`v0.4.0-abi.7` 新增 guest 原子 no-replace rename；已发布的
+  `v0.4.0-abi.8` 让有限 session 的 stdin write/close 共享同一绝对 deadline；待发布的
+  `v0.4.0-abi.9` 新增单次 stdin write/close timeout API；这些版本
   都不改变 guest signal 语义。
 - 源码验证应运行 iSH 的 `internal-signal-mask` 测试、包级 host/iOS 测试，并在真实
   RootFS 上确认“取消 → native termination confirmed → 后续命令 → shutdown”完整链路。
@@ -190,6 +191,7 @@ oneshot stdout 8 MiB、stderr 4 MiB。
 - 检查 App 是否在 main actor 执行阻塞 read 或重 CPU 解析。
 - 对高输出命令设置产品级更小配额，超限后关闭 stdin/terminate/close。
 - stdin 写入也有有界队列；guest 不读取时，不要无限生产数据。
+- 长命令应使用按调用 timeout 的 64 KiB 或更小分块，并在块间持续 drain 输出和检查取消。
 
 Stage1 没有交付新的 Terminal callback drop 事件或 VT parser 上限；如果日志提到这些 API，
 说明运行的是 Stage2 候选源码而不是本阶段。
@@ -206,6 +208,8 @@ direction，让 guest 通过 EOF 清理全部 child；此后新调用返回 not-
 session close 和 instance shutdown，而不是继续复用实例。
 
 - 暂停生产新输入，不要用无延迟循环重试；先继续消费 session 事件/输出并观察退出状态。
+- 使用 `ish_embed_session_write_timeout`/`IshSession.write(_:timeout:)` 为重试设置短期限；
+  timeout 后只重试尚未接纳的单帧 chunk。
 - 如果 supervisor 已停止响应，按产品超时策略 terminate/close session，而不是无限积压。
 - 日志出现该错误后若要重试业务协议，应由上层使用幂等命令或显式 offset/ack 处理部分写入。
 

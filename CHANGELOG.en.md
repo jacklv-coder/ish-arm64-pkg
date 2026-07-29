@@ -20,7 +20,23 @@ Chinese is the primary changelog and this file is its maintained English mirror.
   explicitly unapproved for distribution without changing the XCFramework
   Release's RootFS exclusion policy.
 
-## v0.4.0-abi.8 (planned Stage1 maintenance prerelease)
+## v0.4.0-abi.9 (planned Stage1 maintenance prerelease)
+
+This is a compatibility maintenance release after `v0.4.0-abi.8`. It remains a
+prerelease and is **not stable v0.4.0**.
+
+- The C API adds `ish_embed_session_write_timeout` and
+  `ish_embed_session_close_stdin_timeout`, with matching Swift
+  `write(_:timeout:)`/`closeStdin(timeout:)` methods. Callers can use a short
+  deadline for each stdin operation; the earlier of that deadline and the
+  original SPAWN deadline wins, and expiry publishes no late frame. Long
+  commands can therefore drain output and observe cancellation between bounded
+  chunks.
+- The public C ABI remains version 1 and wire protocol remains v4. The new
+  function symbols are additive. RootFS remains outside the Release. This
+  version does not implement a native Agent Loop or install Codex CLI.
+
+## v0.4.0-abi.8 (published Stage1 maintenance prerelease)
 
 This is a compatibility maintenance release after `v0.4.0-abi.7`. It remains a
 prerelease and is **not stable v0.4.0**.

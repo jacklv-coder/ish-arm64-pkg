@@ -5,7 +5,7 @@
 # existing tag and accidentally creating a stable tag before Stage2 is
 # integrated and separately authorized.
 ish_release_stage1_version_allowed() {
-    [[ "$1" == "v0.4.0-abi.8" ]]
+    [[ "$1" == "v0.4.0-abi.9" ]]
 }
 
 # Call only after the release entry point has validated strict SemVer.
@@ -32,8 +32,9 @@ retain/release、可等待 kernel thread、soft-halt 与内部精确匹配 wire 
 Linux `renameat2(RENAME_NOREPLACE)`；目标已存在时返回 guest `EEXIST`，不会覆盖文件。
 Swift `IshInstance.renameNoReplace` 提供对应类型化错误，并在链接旧 native binary 时
 明确返回 unsupported。
-本次维护版本让有限 timeout streaming session 的 stdin write/close 复用 SPAWN
-绝对 deadline；控制 writer 停滞时有界返回，且明确记录多帧 write 的部分交付语义。
+本次维护版本新增单次 stdin write/close 的显式 timeout API。每次调用的 deadline
+与原始 SPAWN deadline 取更早值；控制 writer 停滞时有界返回，且超时调用不会发布
+late frame。
 公开 C ABI 版本仍为 1；这些变更向后兼容。Swift 源仍不调用 retain/release；
 完整 Swift lifecycle、类型化状态与 Terminal/VT 改造将在 Stage2 交付。
 本 Release 不包含 RootFS，发布脚本也不会上传 RootFS。
@@ -46,10 +47,11 @@ shell or a check-then-rename race. `ish_embed_rename_noreplace` invokes Linux
 exactly matches the running runtime. An existing destination returns guest
 `EEXIST` and is never replaced. Swift `IshInstance.renameNoReplace` exposes a
 typed error and reports unsupported when linked to an older native binary.
-This maintenance release also reuses the SPAWN absolute deadline for finite
-streaming stdin write/close, bounding a stalled control writer and documenting
-partial multi-frame delivery. The public C ABI remains version 1; these changes
-are backward compatible. Swift source still does not call
+This maintenance release also adds explicit per-call timeout APIs for streaming
+stdin write/close. Each call uses the earlier of its own deadline and the
+original SPAWN deadline; a stalled control writer returns boundedly and a timed
+out call publishes no late frame. The public C ABI remains version 1; these
+changes are backward compatible. Swift source still does not call
 retain/release; the complete Swift
 lifecycle, typed statuses, and Terminal/VT changes remain Stage2. This Release
 does not contain a RootFS, and the release script never uploads one.

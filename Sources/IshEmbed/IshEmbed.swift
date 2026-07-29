@@ -820,6 +820,25 @@ public final class IshSession: @unchecked Sendable {
         }
     }
 
+    /// Queues stdin bytes with a deadline relative to this call.
+    ///
+    /// The effective deadline is the earlier of `timeout` and the original
+    /// finite SPAWN deadline. A failed multi-frame call may already have
+    /// admitted a prefix, so stage input before an atomic commit when needed.
+    public func write(_ data: Data, timeout: TimeInterval) throws {
+        let milliseconds = try Self.callTimeoutMilliseconds(timeout)
+        try withRawCall { r in
+            try data.withUnsafeBytes { rawBuf in
+                let rc = ish_embed_swift_session_write_timeout(
+                    r,
+                    rawBuf.baseAddress?.assumingMemoryBound(to: UInt8.self),
+                    rawBuf.count,
+                    milliseconds)
+                if rc != ishOK { throw IshError.from(rc) }
+            }
+        }
+    }
+
     /// Finite-timeout sessions reuse their native SPAWN admission deadline.
     /// Expiry returns `ISH_ERR_TIMEOUT` without publishing a late EOF frame.
     public func closeStdin() throws {
@@ -827,6 +846,37 @@ public final class IshSession: @unchecked Sendable {
             let rc = ish_embed_session_close_stdin(r)
             if rc != ishOK { throw IshError.from(rc) }
         }
+    }
+
+    /// Queues EOF with a deadline relative to this call.
+    ///
+    /// A timeout does not publish a late EOF and leaves stdin open so callers
+    /// can retry after checking cancellation or terminate the session.
+    public func closeStdin(timeout: TimeInterval) throws {
+        let milliseconds = try Self.callTimeoutMilliseconds(timeout)
+        try withRawCall { r in
+            let rc = ish_embed_swift_session_close_stdin_timeout(
+                r,
+                milliseconds)
+            if rc != ishOK { throw IshError.from(rc) }
+        }
+    }
+
+    private static func callTimeoutMilliseconds(
+        _ timeout: TimeInterval
+    ) throws -> UInt32 {
+        guard timeout.isFinite, timeout > 0 else {
+            throw IshError.from(ishErrInvalidArg)
+        }
+        let maximumMilliseconds = Double(UInt32.max - 1)
+        let milliseconds = min(
+            maximumMilliseconds,
+            ceil(timeout * 1_000)
+        )
+        guard milliseconds >= 1 else {
+            throw IshError.from(ishErrTimeout)
+        }
+        return UInt32(milliseconds)
     }
 
     /// Send a signal (standard Linux signum). Use 2 for SIGINT (Ctrl+C).

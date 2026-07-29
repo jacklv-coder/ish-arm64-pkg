@@ -324,6 +324,8 @@ for library in "$device_lib" "$simulator_lib"; do
         _ish_embed_session_release \
         _ish_embed_setup_vm_root \
         _ish_embed_rename_noreplace \
+        _ish_embed_session_write_timeout \
+        _ish_embed_session_close_stdin_timeout \
         _ish_embed_shutdown \
         _ish_embed_bundled_supervisor \
         _ish_embed_bundled_supervisor_len \
@@ -404,6 +406,14 @@ for bridge_binary in \
     grep -Eq '\(__TEXT,__text\) external _ish_embed_rename_noreplace$' \
         <<< "$bridge_symbols"
     ! grep -Eq '\(__TEXT,__text\) weak external _ish_embed_rename_noreplace$' \
+        <<< "$bridge_symbols"
+    grep -Eq '\(__TEXT,__text\) external _ish_embed_session_write_timeout$' \
+        <<< "$bridge_symbols"
+    grep -Eq '\(__TEXT,__text\) external _ish_embed_session_close_stdin_timeout$' \
+        <<< "$bridge_symbols"
+    ! grep -Eq '\(__TEXT,__text\) weak external _ish_embed_session_write_timeout$' \
+        <<< "$bridge_symbols"
+    ! grep -Eq '\(__TEXT,__text\) weak external _ish_embed_session_close_stdin_timeout$' \
         <<< "$bridge_symbols"
 done
 

@@ -15,6 +15,15 @@ int ish_embed_swift_rename_noreplace(ish_embed_instance_t *inst,
                                      uint32_t timeout_ms,
                                      int32_t *out_guest_errno);
 
+/* Swift source compatibility bridge for the bounded-write ABI. */
+int ish_embed_swift_session_write_timeout(ish_embed_session_t *session,
+                                          const uint8_t *buf,
+                                          size_t len,
+                                          uint32_t timeout_ms);
+int ish_embed_swift_session_close_stdin_timeout(
+    ish_embed_session_t *session,
+    uint32_t timeout_ms);
+
 #ifdef __cplusplus
 }
 #endif
