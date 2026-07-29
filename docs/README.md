@@ -12,12 +12,12 @@
 2. **内部 wire protocol**：权威定义为 [`protocol/proto.h`](../protocol/proto.h)，
    Stage1 是 host 与内嵌 supervisor 精确匹配的 v4。
 3. **Swift 源与 manifest binary**：Stage1 Swift 保持 v0.3.3 ABI 兼容且不调用
-   retain/release。manifest 当前固定已公开的 `v0.4.0-abi.6`；只有
-   `v0.4.0-abi.7` 资产公开并验证后，发布事务才将其切到维护 binary。
+   retain/release。manifest 当前固定已公开的 `v0.4.0-abi.7`；只有
+   `v0.4.0-abi.8` 资产公开并验证后，发布事务才将其切到维护 binary。
 4. **RootFS 与 PocketRoot**：RootFS 是独立资产；PocketRoot 是上层产品。两者均不因
    runtime PR 或 Release 自动完成。
 
-`v0.4.0-abi.6` 与维护版本 `v0.4.0-abi.7` 都是 native-first 过渡预发布，不是稳定
+`v0.4.0-abi.7` 与维护版本 `v0.4.0-abi.8` 都是 native-first 过渡预发布，不是稳定
 v0.4。完整 Swift lifecycle、类型化状态、Terminal callback 队列和 VT parser 改造
 属于 Stage2。
 
@@ -39,7 +39,7 @@ v0.4。完整 Swift lifecycle、类型化状态、Terminal callback 队列和 VT
 | [架构与生命周期](architecture.md) | runtime 怎样实现？ABI 1 与 wire v4 有什么区别？ |
 | [测试与验收](testing.md) | native、sanitizer、Swift/iOS 18、文档与供应链门禁各证明什么？ |
 | [故障排查](troubleshooting.md) | boot、链接、协议、输出、shutdown 或发布失败时从哪里查？ |
-| [发布事务](releasing.md) | 为什么维护源码合入后 manifest 仍是 `v0.4.0-abi.6`？何时变成 `v0.4.0-abi.7`？ |
+| [发布事务](releasing.md) | 为什么维护源码合入后 manifest 仍是 `v0.4.0-abi.7`？何时变成 `v0.4.0-abi.8`？ |
 | [变更日志](../CHANGELOG.md) | Stage1 的范围和兼容边界是什么？ |
 
 ## 一页架构
@@ -85,7 +85,7 @@ Swift 对象不是另一套 runtime。它们包装 C handle；C 层管理线程�
 - JIT 单页写及显式 `invalidate_page` 按精确页过滤；仅多页哈希位图可能因碰撞保守多
   失效。下一直链/RET 目标命中待处理代码脏页时才回到 dispatcher；纯数据写可继续直链。
 - RootFS 不属于 package/release，禁止将其混入 Corresponding Source。
-- 当前 `v0.4.0-abi.7` 源码变更不携带 RootFS 或预构建二进制；XCFramework 必须由
+- 当前 `v0.4.0-abi.8` 源码变更不携带 RootFS 或预构建二进制；XCFramework 必须由
   后续发布事务生成。
 
 ## 权威来源

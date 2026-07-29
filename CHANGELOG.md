@@ -6,10 +6,6 @@
 
 ## 未发布
 
-- 有限 timeout 的 streaming session 现在让 stdin write 与 stdin close 一样复用
-  SPAWN 的绝对 admission deadline。stdin 顺序锁或控制 writer 被阻塞时会有界返回
-  `ISH_ERR_TIMEOUT`，不会让上层命令超时失效；零 timeout session 保留旧的同步交付语义。
-  多帧 write 失败前已经接纳的前缀仍可能送达，事务型调用方必须使用 staging。
 - RootFS builder 升级到 schema v4，使用固定 `SOURCE_DATE_EPOCH` 的确定性 tar/gzip
   归档器、去除本地 ref 描述的规范化递归子模块身份，以及不把 host `fakefsify` 二进制
   摘要写入 RootFS 内容身份的稳定源码 provenance。候选生成器先以最小环境变量白名单和
@@ -19,7 +15,19 @@
   `fs.tar.gz`，环境差异仍保留在外部证据中。CI 不上传制品，候选仍明确标记为未获分发
   批准，不改变 XCFramework Release 的 RootFS 排除策略。
 
-## v0.4.0-abi.7（计划中的 Stage1 维护预发布）
+## v0.4.0-abi.8（计划中的 Stage1 维护预发布）
+
+这是 `v0.4.0-abi.7` 之后的兼容性维护版本，仍是 prerelease，**不是稳定
+v0.4.0**。
+
+- 有限 timeout 的 streaming session 现在让 stdin write 与 stdin close 一样复用
+  SPAWN 的绝对 admission deadline。stdin 顺序锁或控制 writer 被阻塞时会有界返回
+  `ISH_ERR_TIMEOUT`，不会让上层命令超时失效；零 timeout session 保留旧的同步交付语义。
+  多帧 write 失败前已经接纳的前缀仍可能送达，事务型调用方必须使用 staging。
+- 公开 C ABI 版本仍为 1，wire protocol 仍为 v4；未新增公开符号。RootFS 不进入
+  Release。本版本不实现原生 Agent Loop，也不会安装 Codex CLI。
+
+## v0.4.0-abi.7（已发布的 Stage1 维护预发布）
 
 这是 `v0.4.0-abi.6` 之后的兼容性维护版本，仍是 prerelease，**不是稳定
 v0.4.0**。
@@ -31,8 +39,8 @@ v0.4.0**。
   supervisor 执行原子重命名，以有界十进制记录返回 guest errno；协议损坏或 helper
   异常会 fail closed。
 - Swift API 新增 `IshInstance.renameNoReplace(from:to:timeout:)` 与
-  `IshFilesystemError`。目标已存在映射为 `.destinationExists`；源码临时链接
-  `v0.4.0-abi.6` 时通过 weak fallback 明确报告 unsupported，不会产生缺失符号。
+  `IshFilesystemError`。目标已存在映射为 `.destinationExists`；源码在 release
+  manifest 更新前通过 weak fallback 兼容旧 binary，不会产生缺失符号。
 - 公开 C ABI 版本仍为 1，wire protocol 仍为 v4；新增函数符号是向后兼容扩展。
   RootFS 不进入 Release。本版本不实现原生 Agent Loop，也不会安装 Codex CLI。
 

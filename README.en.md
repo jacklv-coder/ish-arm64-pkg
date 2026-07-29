@@ -15,17 +15,17 @@ and simulator slices are arm64.
 
 ## Current phase: native ABI transition
 
-The default branch has published `v0.4.0-abi.6` and is preparing the compatible
-maintenance prerelease `v0.4.0-abi.7`. Both belong to the Stage1 **native ABI
+The default branch has published `v0.4.0-abi.7` and is preparing the compatible
+maintenance prerelease `v0.4.0-abi.8`. Both belong to the Stage1 **native ABI
 transition**. Neither is stable `v0.4.0` or the complete v0.4 Swift API. Keep
 these four version surfaces distinct:
 
-| Surface | Current `v0.4.0-abi.6` | Planned `v0.4.0-abi.7` |
+| Surface | Current `v0.4.0-abi.7` | Planned `v0.4.0-abi.8` |
 | --- | --- | --- |
-| Public C ABI | `ISH_EMBED_ABI_VERSION == 1`; compatible symbols are published | Still ABI 1, with one backward-compatible atomic-rename function symbol |
+| Public C ABI | `ISH_EMBED_ABI_VERSION == 1`; compatible symbols including atomic rename are public | Still ABI 1 with no new symbol; finite-session stdin deadline semantics are tightened |
 | Internal wire protocol | exact-match v4 between host and embedded supervisor | still v4; this is not the public C ABI version |
-| `Package.swift` | pins the public `v0.4.0-abi.6` URL/checksum | the release transaction creates a manifest-only release commit pinned to the maintenance binary |
-| Swift source | remains v0.3.3-ABI compatible and does not call retain/release | adds a typed rename API with a weak fallback for old binaries |
+| `Package.swift` | pins the public `v0.4.0-abi.7` URL/checksum | the release transaction creates a manifest-only release commit pinned to the maintenance binary |
+| Swift source | remains v0.3.3-ABI compatible and includes typed rename | same API; finite stdin writes can no longer bypass the product deadline |
 
 Stage1 native code adds session retain/release, a joinable kernel thread,
 soft-halt, exact wire v4, and complete session close. The existing Swift wrapper
@@ -90,15 +90,15 @@ gives those narrow differences independent PRs, CI, and an exact gitlink, making
 PocketRoot builds and releases reproducible. We do not directly rewrite somebody
 else's local upstream repository; generally useful fixes can still be contributed
 to [iSH upstream](https://github.com/ish-app/ish), while the fork carries project
-gates until upstream accepts and releases them. The current `v0.4.0-abi.7`
+gates until upstream accepts and releases them. The current `v0.4.0-abi.8`
 source change includes neither RootFS content nor any prebuilt XCFramework/guest
 binary; binaries may be produced and published only by a later release
 transaction after its gates pass.
 
 ## Installation status
 
-`v0.4.0-abi.6` is public and [`Package.swift`](Package.swift) currently pins it.
-Until `v0.4.0-abi.7` is published, the manifest keeps pointing at that verified
+`v0.4.0-abi.7` is public and [`Package.swift`](Package.swift) currently pins it.
+Until `v0.4.0-abi.8` is published, the manifest keeps pointing at that verified
 asset instead of advertising a future 404 URL. Use Xcode's
 **File → Add Package Dependencies…** with:
 
@@ -110,8 +110,9 @@ Select a version whose tag, `libIshKernel.xcframework.zip`, Corresponding Source
 and manifest URL/checksum all match. Consumer projects do not need Meson, Zig,
 or LLVM.
 
-`v0.4.0-abi.7` adds guest-atomic rename without a shell or check-then-rename
-race and maps an existing destination to a typed Swift error. It does not
+`v0.4.0-abi.7` provides guest-atomic rename without a shell or
+check-then-rename race. `v0.4.0-abi.8` makes finite-timeout stdin write/close
+share the SPAWN absolute deadline. It does not
 implement a native Agent Loop or
 install Codex CLI in the app.
 Node.js/npm remain optional choices of the RootFS/guest package-management flow,
@@ -149,8 +150,8 @@ do {
 A finite timeout starts at Swift API entry, deducts argv/env/cwd/chroot
 marshalling, and then covers the native SPAWN staging gate and control-queue
 admission. Finite streaming sessions use ordered bounded asynchronous
-admission for SPAWN, stdin close, and terminate. The session retains native
-SPAWN's absolute deadline, and stdin close reuses it when acquiring the writer
+admission for SPAWN, stdin write/close, and terminate. The session retains native
+SPAWN's absolute deadline, and stdin write/close reuses it for the ordering lock and writer
 gate, returning `ISH_ERR_TIMEOUT` on expiry. Callers must still read
 authoritative `EXITED` before confirming termination. Stdin close returns
 `ISH_ERR_BUSY` rather than waiting behind an active stdin write. If the runtime
