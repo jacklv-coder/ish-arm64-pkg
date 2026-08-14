@@ -5,7 +5,7 @@
 # existing tag and accidentally creating a stable tag before Stage2 is
 # integrated and separately authorized.
 ish_release_stage1_version_allowed() {
-    [[ "$1" == "v0.4.0-abi.10" ]]
+    [[ "$1" == "v0.4.0-abi.11" ]]
 }
 
 # Call only after the release entry point has validated strict SemVer.
@@ -32,7 +32,7 @@ retain/release、可等待 kernel thread、soft-halt 与内部精确匹配 wire 
 Linux `renameat2(RENAME_NOREPLACE)`；目标已存在时返回 guest `EEXIST`，不会覆盖文件。
 Swift `IshInstance.renameNoReplace` 提供对应类型化错误，并在链接旧 native binary 时
 明确返回 unsupported。
-本次维护版本新增单次 stdin write/close 的显式 timeout API。每次调用的 deadline
+本维护系列提供单次 stdin write/close 的显式 timeout API。每次调用的 deadline
 与原始 SPAWN deadline 取更早值；控制 writer 停滞时有界返回，且超时调用不会发布
 late frame。本版本还更新固定的 iSH kernel：强制 guest task teardown 会串行化，
 group exit 开始后拒绝创建替代 interval timer，避免 host pthread 或 timer callback
@@ -44,6 +44,9 @@ owner 仍在使用的 descriptor。poll/socket/futex/condition/vfork/native wait
 强制分离；native output worker 在 handler 运行前发布，并可在终端背压时定向取消。
 handler 会先恢复 cwd、释放 fd/argv，再完成 task 退出；宿主 `SIGTERM` 不再用作
 pthread 终止手段。
+本版本还让破坏性 guest wait 保留 zombie，直到所有强制分离的 host pthread 与较晚的
+thread-group member 都释放旧进程资源。`WNOWAIT` 仍可用于观察，最后一个 owner 会唤醒
+waiter，避免 replacement embedded process 过早复用 runtime。
 公开 C ABI 版本仍为 1；这些变更向后兼容。Swift 源仍不调用 retain/release；
 完整 Swift lifecycle、类型化状态与 Terminal/VT 改造将在 Stage2 交付。
 本 Release 不包含 RootFS，发布脚本也不会上传 RootFS。
@@ -56,7 +59,7 @@ shell or a check-then-rename race. `ish_embed_rename_noreplace` invokes Linux
 exactly matches the running runtime. An existing destination returns guest
 `EEXIST` and is never replaced. Swift `IshInstance.renameNoReplace` exposes a
 typed error and reports unsupported when linked to an older native binary.
-This maintenance release also adds explicit per-call timeout APIs for streaming
+This maintenance series also includes explicit per-call timeout APIs for streaming
 stdin write/close. Each call uses the earlier of its own deadline and the
 original SPAWN deadline; a stalled control writer returns boundedly and a timed
 out call publishes no late frame. This release also advances the pinned iSH
@@ -73,6 +76,10 @@ and native waits observe forced detachment. Native output workers are published
 before handlers run and can be cancelled under terminal backpressure; handlers
 restore cwd and release retained fds/argv before completing task exit.
 Host `SIGTERM` is no longer used to terminate a pthread.
+Destructive guest waits now keep a zombie process visible until every
+force-detached host pthread and late thread-group member has released the old
+process. Observational `WNOWAIT` remains available, while the final owner wakes
+the waiter before a replacement embedded process can start.
 The public C ABI remains version 1; these changes are backward compatible.
 Swift source still does not call
 retain/release; the complete Swift

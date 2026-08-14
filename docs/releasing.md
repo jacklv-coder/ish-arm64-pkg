@@ -2,28 +2,28 @@
 
 简体中文｜[English](releasing.en.md)
 
-本文用于维护者发布 XCFramework 与匹配的 Corresponding Source。`v0.4.0-abi.9`
-已经公开；当前唯一允许准备的下一个标签是兼容性维护版本 `v0.4.0-abi.10`。它仍是 ABI
+本文用于维护者发布 XCFramework 与匹配的 Corresponding Source。`v0.4.0-abi.10`
+已经公开；当前唯一允许准备的下一个标签是兼容性维护版本 `v0.4.0-abi.11`。它仍是 ABI
 过渡 prerelease，**不是稳定 v0.4.0**。执行发布会创建公开 GitHub Release 和更新
 默认分支，必须在获得明确发布授权后进行。
 
-## `v0.4.0-abi.10` 发布前后状态
+## `v0.4.0-abi.11` 发布前后状态
 
 ### 维护 PR 合入后、Release 发布前
 
-- `Package.swift` 仍固定已发布的 `v0.4.0-abi.9` URL/checksum；
+- `Package.swift` 仍固定已发布的 `v0.4.0-abi.10` URL/checksum；
 - Swift 源保持 v0.3.3 ABI 兼容，不调用 retain/release；
 - 仓库源码包含已发布的 abi.2 procfs/task 生命周期修复、abi.3 guest `uname`
   字段边界修复、abi.4 内部 SIGUSR1 解屏蔽修复、abi.5 有限 streaming control-path
   deadline、abi.6 Swift 参数封送与 stdin-close deadline 复用、abi.7 guest 原子
   no-replace rename、abi.8 有限 stdin-write deadline 复用、abi.9 单次 stdin
-  write/close timeout API，以及待发布 abi.10 的强制 task teardown/address-space
-  生命周期修复；
-- 没有可供使用方安装的 `v0.4.0-abi.10` binary。
+  write/close timeout API、abi.10 强制 task teardown/address-space 生命周期修复，
+  以及待发布 abi.11 的 thread-group 静止后 destructive wait/reap 边界；
+- 没有可供使用方安装的 `v0.4.0-abi.11` binary。
 
 这个中间状态是刻意设计的：默认分支不会先暴露一个尚未公开、会返回 404 的资产 URL。
 
-### `v0.4.0-abi.10` 成功发布后
+### `v0.4.0-abi.11` 成功发布后
 
 - release commit 只改 `Package.swift`，固定到新 XCFramework URL/checksum；
 - GitHub prerelease 包含 `libIshKernel.xcframework.zip` 与
@@ -66,7 +66,7 @@ scripts/verify-ios-artifact.sh
 scripts/test-swift-ios.sh --local-binary
 ```
 
-`--manifest-binary` 证明 Stage1 Swift 仍能链接当前固定的 `v0.4.0-abi.9` binary；
+`--manifest-binary` 证明 Stage1 Swift 仍能链接当前固定的 `v0.4.0-abi.10` binary；
 `--local-binary` 证明相同 Swift 能链接待发布的 ABI 过渡 XCFramework。两者缺一不可。
 
 ## 执行
@@ -74,14 +74,14 @@ scripts/test-swift-ios.sh --local-binary
 确认标签不存在且获得发布授权后：
 
 ```sh
-scripts/release.sh v0.4.0-abi.10
+scripts/release.sh v0.4.0-abi.11
 ```
 
 脚本根据 SemVer 后缀设置 GitHub `prerelease=true`。只有 `v*-abi.*` 标签会附加专用
 中英文说明，明确它不是稳定 v0.4，列出 native lifecycle/retain-release/
 join-soft-halt/wire v4，并说明 Swift 和 RootFS 边界。
-除了 SemVer 检查，Stage1 版本策略还会硬性拒绝除 `v0.4.0-abi.10` 以外的任何标签。
-因此重用 `v0.4.0-abi.9` 或误输入 `v0.4.0`，都会在任何 tag、draft 或资产写入前失败。
+除了 SemVer 检查，Stage1 版本策略还会硬性拒绝除 `v0.4.0-abi.11` 以外的任何标签。
+因此重用 `v0.4.0-abi.10` 或误输入 `v0.4.0`，都会在任何 tag、draft 或资产写入前失败。
 
 不要用 `v0.4.0` 代替过渡标签。稳定标签必须等 Stage2 合入、迁移与回归完成后另行决定。
 
@@ -128,9 +128,9 @@ LICENSE/NOTICE、对应源码、SBOM、PocketRoot manifest 更新和负责人明
 ## 发布后验收
 
 ```sh
-gh release view v0.4.0-abi.10 --repo jacklv-coder/ish-arm64-pkg
+gh release view v0.4.0-abi.11 --repo jacklv-coder/ish-arm64-pkg
 git fetch origin --tags
-git show v0.4.0-abi.10:Package.swift
+git show v0.4.0-abi.11:Package.swift
 git pull --ff-only origin main
 scripts/test-swift-ios.sh --manifest-binary
 ```
@@ -161,7 +161,7 @@ scripts/test-swift-ios.sh --manifest-binary
 
 ## PocketRoot 升级条件
 
-只有 `v0.4.0-abi.10` 公开资产、manifest 更新和发布后真链接全部通过，PocketRoot 才能
-把依赖从 `v0.4.0-abi.9` 更新到该维护版本并重跑 Xcode 16/iOS 18 门禁。Stage2 与
+只有 `v0.4.0-abi.11` 公开资产、manifest 更新和发布后真链接全部通过，PocketRoot 才能
+把依赖从 `v0.4.0-abi.10` 更新到该维护版本并重跑 Xcode 16/iOS 18 门禁。Stage2 与
 原生 Agent Loop 均不在本次发布范围内；未来启用时仍需独立计划、CR、测试、文档和
 发布决策。

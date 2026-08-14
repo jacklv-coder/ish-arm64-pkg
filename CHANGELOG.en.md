@@ -20,7 +20,27 @@ Chinese is the primary changelog and this file is its maintained English mirror.
   explicitly unapproved for distribution without changing the XCFramework
   Release's RootFS exclusion policy.
 
-## v0.4.0-abi.10 (planned Stage1 maintenance prerelease)
+## v0.4.0-abi.11 (planned Stage1 maintenance prerelease)
+
+This is a compatibility maintenance release after `v0.4.0-abi.10`. It remains
+a prerelease and is **not stable v0.4.0**.
+
+- `third_party/ish` advances to `7564928c`. A destructive guest-supervisor
+  `wait4` now retains the zombie until every force-detached host pthread and
+  late-published thread-group member has released its resources. The embedder
+  therefore cannot treat `EXITED` as permission to start a replacement guest
+  process while the previous process still owns runtime state.
+- `WNOWAIT` can still observe a non-quiescent zombie. Ordinary waits and
+  WNOHANG remain pending until the group is quiescent, and the final owner
+  wakes the parent waiter. The previous deferred-group disposal side path is
+  removed so process visibility and actual resource lifetime share one boundary.
+- A deterministic task-lifetime regression covers the force-detached leader
+  plus late CLONE_THREAD ordering. Normal, ASan/UBSan, TSan, Linux clang/gcc
+  end-to-end, and iOS/macOS build gates pass. The public C ABI remains version
+  1, wire protocol remains v4, and Swift API is unchanged. RootFS remains
+  outside the Release.
+
+## v0.4.0-abi.10 (published Stage1 maintenance prerelease)
 
 This is a compatibility maintenance release after `v0.4.0-abi.9`. It remains a
 prerelease and is **not stable v0.4.0**.

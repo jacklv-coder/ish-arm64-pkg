@@ -15,7 +15,22 @@
   `fs.tar.gz`，环境差异仍保留在外部证据中。CI 不上传制品，候选仍明确标记为未获分发
   批准，不改变 XCFramework Release 的 RootFS 排除策略。
 
-## v0.4.0-abi.10（计划中的 Stage1 维护预发布）
+## v0.4.0-abi.11（计划中的 Stage1 维护预发布）
+
+这是 `v0.4.0-abi.10` 之后的兼容性维护版本，仍是 prerelease，**不是稳定
+v0.4.0**。
+
+- `third_party/ish` 更新到 `7564928c`。guest supervisor 的破坏性 `wait4` 现在会保留
+  zombie，直到所有强制分离的 host pthread 与较晚发布的 thread-group member 都完成
+  资源回收；避免上层把 `EXITED` 当成许可、过早启动下一个 embedded guest process。
+- `WNOWAIT` 仍可观察尚未静止的 zombie；普通 wait/WNOHANG 在 group 未静止时保持 pending，
+  最后一个 owner 退出后会唤醒 parent waiter。旧的延迟 group 回收旁路已移除，进程可见性
+  与真实资源生命周期重新使用同一个边界。
+- 新增可确定复现 force-detached leader 与 late CLONE_THREAD member 顺序的 task-lifetime
+  回归，并已通过普通、ASan/UBSan、TSan、Linux clang/gcc end-to-end 与 iOS/macOS 构建。
+  公开 C ABI 仍为 1，wire protocol 仍为 v4，Swift API 不变；RootFS 不进入 Release。
+
+## v0.4.0-abi.10（已发布的 Stage1 维护预发布）
 
 这是 `v0.4.0-abi.9` 之后的兼容性维护版本，仍是 prerelease，**不是稳定
 v0.4.0**。

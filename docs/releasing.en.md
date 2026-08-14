@@ -3,31 +3,32 @@
 [简体中文](releasing.md) | English
 
 This guide is for maintainers publishing the XCFramework and matching
-Corresponding Source. `v0.4.0-abi.9` is already public; the only next tag
+Corresponding Source. `v0.4.0-abi.10` is already public; the only next tag
 allowed for preparation is the compatible maintenance release
-`v0.4.0-abi.10`. It remains an ABI-transition prerelease that is **not stable
+`v0.4.0-abi.11`. It remains an ABI-transition prerelease that is **not stable
 v0.4.0**. Publication
 creates a public GitHub Release and updates the default branch, so run it only
 with explicit release authorization.
 
-## State before and after `v0.4.0-abi.10` publication
+## State before and after `v0.4.0-abi.11` publication
 
 ### After the maintenance PR merges, before Release publication
 
-- `Package.swift` still pins the published `v0.4.0-abi.9` URL/checksum;
+- `Package.swift` still pins the published `v0.4.0-abi.10` URL/checksum;
 - Swift source remains v0.3.3-ABI compatible and does not call retain/release;
 - repository source contains the published abi.2 procfs/task lifecycle fixes,
   abi.3 guest `uname` field bounds, abi.4 internal-SIGUSR1 fix, abi.5 finite
   streaming control-path deadline, abi.6 Swift-marshalling/stdin-close deadline
   reuse, abi.7 guest-atomic no-replace rename, abi.8 finite stdin-write
-  deadline reuse, abi.9 per-call stdin write/close timeout APIs, and the pending
-  abi.10 forced task-teardown/address-space lifetime fix;
-- there is no installable `v0.4.0-abi.10` binary.
+  deadline reuse, abi.9 per-call stdin write/close timeout APIs, abi.10 forced
+  task-teardown/address-space lifetime fixes, and the pending abi.11
+  destructive-wait/reap boundary after thread-group quiescence;
+- there is no installable `v0.4.0-abi.11` binary.
 
 This intermediate state is intentional: the default branch never advertises an
 unpublished asset URL that returns 404.
 
-### After successful `v0.4.0-abi.10` publication
+### After successful `v0.4.0-abi.11` publication
 
 - the release commit changes only `Package.swift`, pinning the new XCFramework
   URL/checksum;
@@ -77,7 +78,7 @@ scripts/test-swift-ios.sh --local-binary
 ```
 
 `--manifest-binary` proves that Stage1 Swift still links the currently pinned
-`v0.4.0-abi.9` binary. `--local-binary` proves that the same Swift source links
+`v0.4.0-abi.10` binary. `--local-binary` proves that the same Swift source links
 the maintenance XCFramework. Both boundaries are required.
 
 ## Execute
@@ -85,7 +86,7 @@ the maintenance XCFramework. Both boundaries are required.
 After confirming that the tag is absent and publication is authorized:
 
 ```sh
-scripts/release.sh v0.4.0-abi.10
+scripts/release.sh v0.4.0-abi.11
 ```
 
 The script derives GitHub `prerelease=true` from the SemVer suffix. Only
@@ -93,7 +94,7 @@ The script derives GitHub `prerelease=true` from the SemVer suffix. Only
 that this is not stable v0.4, describes native lifecycle/retain-release/
 join-soft-halt/wire v4, and records the Swift and RootFS boundaries.
 In addition to strict SemVer validation, the Stage1 policy rejects every tag
-except `v0.4.0-abi.10`. Reusing `v0.4.0-abi.9` or accidentally entering
+except `v0.4.0-abi.11`. Reusing `v0.4.0-abi.10` or accidentally entering
 `v0.4.0` therefore fails before any tag, draft, or asset is written.
 
 Do not substitute `v0.4.0`. A stable tag must wait for a separate decision after
@@ -150,9 +151,9 @@ and explicit owner authorization.
 ## Post-publication acceptance
 
 ```sh
-gh release view v0.4.0-abi.10 --repo jacklv-coder/ish-arm64-pkg
+gh release view v0.4.0-abi.11 --repo jacklv-coder/ish-arm64-pkg
 git fetch origin --tags
-git show v0.4.0-abi.10:Package.swift
+git show v0.4.0-abi.11:Package.swift
 git pull --ff-only origin main
 scripts/test-swift-ios.sh --manifest-binary
 ```
@@ -186,8 +187,8 @@ manual recovery.
 
 ## PocketRoot upgrade gate
 
-PocketRoot may move its dependency from `v0.4.0-abi.9` to the maintenance
-release only after the public `v0.4.0-abi.10` assets, manifest update, and
+PocketRoot may move its dependency from `v0.4.0-abi.10` to the maintenance
+release only after the public `v0.4.0-abi.11` assets, manifest update, and
 post-publication real link all pass, followed by its Xcode 16/iOS 18 gates.
 Stage2 and a native Agent Loop are outside this release. Either still requires
 an independent plan, review, tests, documentation, and release decision.
