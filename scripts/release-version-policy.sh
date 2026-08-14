@@ -5,7 +5,7 @@
 # existing tag and accidentally creating a stable tag before Stage2 is
 # integrated and separately authorized.
 ish_release_stage1_version_allowed() {
-    [[ "$1" == "v0.4.0-abi.9" ]]
+    [[ "$1" == "v0.4.0-abi.10" ]]
 }
 
 # Call only after the release entry point has validated strict SemVer.
@@ -34,7 +34,16 @@ Swift `IshInstance.renameNoReplace` 提供对应类型化错误，并在链接�
 明确返回 unsupported。
 本次维护版本新增单次 stdin write/close 的显式 timeout API。每次调用的 deadline
 与原始 SPAWN deadline 取更早值；控制 writer 停滞时有界返回，且超时调用不会发布
-late frame。
+late frame。本版本还更新固定的 iSH kernel：强制 guest task teardown 会串行化，
+group exit 开始后拒绝创建替代 interval timer，避免 host pthread 或 timer callback
+在 task/address-space 已进入最终回收阶段后继续持有它们。最终清理统一采用
+`pids_lock -> ptrace.lock` 全局锁顺序，避免与 wait4/ptrace lookup 形成 ABBA 死锁。
+强制分离的 fd table 还会逐项记录延迟 descriptor 引用；共享 host handle 只在最后
+一个可运行 owner 退出后关闭，从而唤醒阻塞 syscall，同时保留复制 fd table 等外部
+owner 仍在使用的 descriptor。poll/socket/futex/condition/vfork/native wait 会观察
+强制分离；native output worker 在 handler 运行前发布，并可在终端背压时定向取消。
+handler 会先恢复 cwd、释放 fd/argv，再完成 task 退出；宿主 `SIGTERM` 不再用作
+pthread 终止手段。
 公开 C ABI 版本仍为 1；这些变更向后兼容。Swift 源仍不调用 retain/release；
 完整 Swift lifecycle、类型化状态与 Terminal/VT 改造将在 Stage2 交付。
 本 Release 不包含 RootFS，发布脚本也不会上传 RootFS。
@@ -50,8 +59,22 @@ typed error and reports unsupported when linked to an older native binary.
 This maintenance release also adds explicit per-call timeout APIs for streaming
 stdin write/close. Each call uses the earlier of its own deadline and the
 original SPAWN deadline; a stalled control writer returns boundedly and a timed
-out call publishes no late frame. The public C ABI remains version 1; these
-changes are backward compatible. Swift source still does not call
+out call publishes no late frame. This release also advances the pinned iSH
+kernel to serialize forced guest-task teardown and reject replacement interval timers
+once group exit starts. That prevents a host pthread or timer callback
+from retaining task/address-space state after the teardown path has made it
+eligible for disposal. Final cleanup follows the global
+`pids_lock -> ptrace.lock` order to prevent an ABBA deadlock with wait4/ptrace
+lookup. Force-detached fd tables also account for every deferred descriptor
+reference. A shared host handle closes only after the last runnable owner exits,
+waking blocked syscalls without invalidating a descriptor still retained by a
+copied table or another external owner. Poll, socket, futex, condition, vfork,
+and native waits observe forced detachment. Native output workers are published
+before handlers run and can be cancelled under terminal backpressure; handlers
+restore cwd and release retained fds/argv before completing task exit.
+Host `SIGTERM` is no longer used to terminate a pthread.
+The public C ABI remains version 1; these changes are backward compatible.
+Swift source still does not call
 retain/release; the complete Swift
 lifecycle, typed statuses, and Terminal/VT changes remain Stage2. This Release
 does not contain a RootFS, and the release script never uploads one.

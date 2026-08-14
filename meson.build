@@ -257,6 +257,8 @@ test('lifecycle_spawn_argument_bound', lifecycle_test,
     args: ['spawn-argument-bound'], timeout: 10)
 test('lifecycle_shutdown_drain', lifecycle_test,
     args: ['shutdown-drain'], timeout: 10)
+test('lifecycle_halt_wait_timeout', lifecycle_test,
+    args: ['halt-wait-timeout'], timeout: 10)
 test('lifecycle_log_backpressure', lifecycle_test,
     args: ['log-backpressure'], timeout: 10)
 test('lifecycle_oneshot_timeout', lifecycle_test,

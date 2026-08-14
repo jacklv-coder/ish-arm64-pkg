@@ -61,6 +61,8 @@ extern void (*exit_hook)(struct task *task, int code);
 
 static ish_ffi_exit_cb g_exit_cb = NULL;
 static void           *g_exit_ctx = NULL;
+static ish_ffi_halt_wait_timeout_cb g_halt_wait_timeout_cb = NULL;
+static void                         *g_halt_wait_timeout_ctx = NULL;
 static pthread_t       g_kernel_thread;
 static int             g_kernel_thread_started = 0;
 
@@ -84,6 +86,20 @@ void ish_ffi_register_exit_hook(ish_ffi_exit_cb cb, void *ctx) {
     g_exit_cb  = cb;
     g_exit_ctx = ctx;
     exit_hook  = cb ? embed_exit_handler : NULL;
+}
+
+/* Strong override for the weak embedded-halt notification in kernel/exit.c.
+ * The host uses it to bound its public shutdown call without allowing iSH to
+ * unmount a filesystem that is still referenced by a guest task. */
+void ish_embed_halt_wait_timed_out(void) {
+    if (g_halt_wait_timeout_cb)
+        g_halt_wait_timeout_cb(g_halt_wait_timeout_ctx);
+}
+
+void ish_ffi_register_halt_wait_timeout_hook(
+        ish_ffi_halt_wait_timeout_cb cb, void *ctx) {
+    g_halt_wait_timeout_cb = cb;
+    g_halt_wait_timeout_ctx = ctx;
 }
 
 /* ------------------------------------------------------------------ *

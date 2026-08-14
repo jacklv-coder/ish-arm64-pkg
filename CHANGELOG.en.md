@@ -20,7 +20,42 @@ Chinese is the primary changelog and this file is its maintained English mirror.
   explicitly unapproved for distribution without changing the XCFramework
   Release's RootFS exclusion policy.
 
-## v0.4.0-abi.9 (planned Stage1 maintenance prerelease)
+## v0.4.0-abi.10 (planned Stage1 maintenance prerelease)
+
+This is a compatibility maintenance release after `v0.4.0-abi.9`. It remains a
+prerelease and is **not stable v0.4.0**.
+
+- `third_party/ish` advances to `8dd7777a`. Forced guest-task exit now
+  serializes resource detachment, waits for a still-running host pthread, and
+  defers final task/address-space disposal. Once group exit starts, replacement
+  `ITIMER_REAL` creation is also rejected so a timer callback cannot reacquire
+  a task that teardown is about to dispose. Final cleanup also follows the
+  global `pids_lock -> ptrace.lock` order, preventing an ABBA deadlock with
+  wait4/ptrace lookup.
+- Guest fd tables now account for force-detached owners and each duplicated
+  descriptor's deferred reference. Shared host handles close only after the
+  last runnable owner exits; copied tables, concurrent close, descriptors
+  installed after the teardown snapshot, and `dup*` expansion preserve an
+  explicit ownership and lock order. This wakes blocked syscalls without
+  prematurely closing a descriptor still used by an external owner.
+- Blocking poll, socket, futex, condition, vfork, and native-wait paths now
+  observe forced detachment. Native output workers are published before a
+  handler runs and can be cancelled under terminal backpressure; handlers
+  restore cwd and release retained fds/argv before the task exits. Host
+  `SIGTERM` is no longer used as a pthread termination mechanism, preventing an
+  embedded runtime from terminating its containing App.
+- Embedded halt now waits for every started guest task before unmounting the
+  RootFS and continues tracking deferred groups already unpublished from the
+  PID table. If tasks remain after the 10-second safety deadline, the kernel
+  stays fail-closed and notifies the host; `ish_embed_shutdown` returns bounded
+  `ISH_ERR_TIMEOUT` while retaining the instance, so a retry can finish cleanup
+  after those tasks exit without unmounting beneath a live thread.
+- Focused task-lifetime regression coverage passed in the iSH fork's normal,
+  ASan/UBSan, TSan, and x86 configurations. The public C ABI remains version 1,
+  wire protocol remains v4, and the Swift API is unchanged. RootFS remains
+  outside the Release.
+
+## v0.4.0-abi.9 (published Stage1 maintenance prerelease)
 
 This is a compatibility maintenance release after `v0.4.0-abi.8`. It remains a
 prerelease and is **not stable v0.4.0**.
