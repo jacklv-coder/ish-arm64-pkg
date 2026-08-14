@@ -30,7 +30,7 @@ Environment equivalents:
 Every release contains libIshKernel.xcframework.zip and its matching
 IshEmbed-corresponding-source.tar.gz. This script never publishes a RootFS;
 RootFS provenance, hashing, licensing, and distribution remain a separate flow.
-The Stage1 policy accepts only v0.4.0-abi.11 and publishes it as a prerelease.
+The Stage1 policy accepts only v0.4.0-abi.12 and publishes it as a prerelease.
 A suffix-free stable v0.4.0 remains blocked until the Stage2 policy replaces
 this transition gate.
 EOF
@@ -110,7 +110,7 @@ VERSION_POLICY="$(cd "$(dirname "$0")" && pwd)/release-version-policy.sh"
 # shellcheck source=release-version-policy.sh
 source "$VERSION_POLICY"
 ish_release_stage1_version_allowed "$VERSION" \
-    || fail "Stage1 release policy allows only v0.4.0-abi.11; stable v0.4.0 requires Stage2"
+    || fail "Stage1 release policy allows only v0.4.0-abi.12; stable v0.4.0 requires Stage2"
 GITHUB_PRERELEASE="$(ish_release_github_prerelease "$VERSION")"
 if [[ "$VERSION" == *-* ]]; then
     PRERELEASE="${VERSION#*-}"

@@ -15,16 +15,16 @@ and simulator slices are arm64.
 
 ## Current phase: native ABI transition
 
-The default branch has published `v0.4.0-abi.10` and is preparing the compatible
-maintenance prerelease `v0.4.0-abi.11`. Both belong to the Stage1 **native ABI
+The default branch has published `v0.4.0-abi.11` and is preparing the compatible
+maintenance prerelease `v0.4.0-abi.12`. Both belong to the Stage1 **native ABI
 transition**. Neither is stable `v0.4.0` or the complete v0.4 Swift API. Keep
 these four version surfaces distinct:
 
-| Surface | Current `v0.4.0-abi.10` | Planned `v0.4.0-abi.11` |
+| Surface | Current `v0.4.0-abi.11` | Planned `v0.4.0-abi.12` |
 | --- | --- | --- |
-| Public C ABI | `ISH_EMBED_ABI_VERSION == 1`; atomic rename, finite-stdin deadlines, per-call stdin timeouts, and forced-teardown lifetime fixes are public | Still ABI 1; only the internal destructive-wait/reap boundary changes |
+| Public C ABI | `ISH_EMBED_ABI_VERSION == 1`; forced-teardown and destructive-wait/reap lifetime fixes are public | Still ABI 1; only the internal Apple rwlock and deferred supervisor reap change |
 | Internal wire protocol | exact-match v4 between host and embedded supervisor | still v4; this is not the public C ABI version |
-| `Package.swift` | pins the public `v0.4.0-abi.10` URL/checksum | the release transaction creates a manifest-only release commit pinned to the maintenance binary |
+| `Package.swift` | pins the public `v0.4.0-abi.11` URL/checksum | the release transaction creates a manifest-only release commit pinned to the maintenance binary |
 | Swift source | remains v0.3.3-ABI compatible and includes typed rename plus per-call stdin timeouts | unchanged |
 
 Stage1 native code adds session retain/release, a joinable kernel thread,
@@ -90,15 +90,15 @@ gives those narrow differences independent PRs, CI, and an exact gitlink, making
 PocketRoot builds and releases reproducible. We do not directly rewrite somebody
 else's local upstream repository; generally useful fixes can still be contributed
 to [iSH upstream](https://github.com/ish-app/ish), while the fork carries project
-gates until upstream accepts and releases them. The current `v0.4.0-abi.11`
+gates until upstream accepts and releases them. The current `v0.4.0-abi.12`
 source change includes neither RootFS content nor any prebuilt XCFramework/guest
 binary; binaries may be produced and published only by a later release
 transaction after its gates pass.
 
 ## Installation status
 
-`v0.4.0-abi.10` is public and [`Package.swift`](Package.swift) currently pins it.
-Until `v0.4.0-abi.11` is published, the manifest keeps pointing at that verified
+`v0.4.0-abi.11` is public and [`Package.swift`](Package.swift) currently pins it.
+Until `v0.4.0-abi.12` is published, the manifest keeps pointing at that verified
 asset instead of advertising a future 404 URL. Use Xcode's
 **File → Add Package Dependencies…** with:
 
@@ -110,12 +110,11 @@ Select a version whose tag, `libIshKernel.xcframework.zip`, Corresponding Source
 and manifest URL/checksum all match. Consumer projects do not need Meson, Zig,
 or LLVM.
 
-`v0.4.0-abi.10` provides guest-atomic rename without a shell, bounded stdin
-deadlines, per-call write/close timeouts, and lifetime fixes between forced
-guest-task teardown and interval timers, shared fds, blocking syscalls, and
-native output workers. `v0.4.0-abi.11` delays destructive waits until the full
-thread group is quiescent, preventing sequential guest startup from reusing
-runtime resources that the previous process still owns. It does not
+`v0.4.0-abi.11` provides guest-atomic rename without a shell, bounded stdin
+deadlines, per-call write/close timeouts, forced guest-task teardown, and delays
+destructive waits until the full thread group is quiescent. `v0.4.0-abi.12`
+further prevents writer starvation in the Apple-platform rwlock and lets the
+supervisor boundedly wait for destructive reap after observing a zombie. It does not
 implement a native Agent Loop or
 install Codex CLI in the app.
 Node.js/npm remain optional choices of the RootFS/guest package-management flow,
