@@ -5,7 +5,7 @@
 # existing tag and accidentally creating a stable tag before Stage2 is
 # integrated and separately authorized.
 ish_release_stage1_version_allowed() {
-    [[ "$1" == "v0.4.0-abi.11" ]]
+    [[ "$1" == "v0.4.0-abi.12" ]]
 }
 
 # Call only after the release entry point has validated strict SemVer.
@@ -47,6 +47,10 @@ pthread 终止手段。
 本版本还让破坏性 guest wait 保留 zombie，直到所有强制分离的 host pthread 与较晚的
 thread-group member 都释放旧进程资源。`WNOWAIT` 仍可用于观察，最后一个 owner 会唤醒
 waiter，避免 replacement embedded process 过早复用 runtime。
+本维护版进一步为 Apple 平台采用写者优先的内部读写锁：已有写者排队时，后到的读者
+不能持续插队，从而避免代码脏页失效路径在高并发 guest 读操作下长期阻塞。supervisor
+在 `WNOWAIT` 已观察到 zombie、但 destructive `waitpid(WNOHANG)` 暂时返回 0 时，也会在
+原清理期限内重试，等待 guest thread group 完成资源静止，而不是错误地 fail-close VM。
 公开 C ABI 版本仍为 1；这些变更向后兼容。Swift 源仍不调用 retain/release；
 完整 Swift lifecycle、类型化状态与 Terminal/VT 改造将在 Stage2 交付。
 本 Release 不包含 RootFS，发布脚本也不会上传 RootFS。
@@ -80,6 +84,13 @@ Destructive guest waits now keep a zombie process visible until every
 force-detached host pthread and late thread-group member has released the old
 process. Observational `WNOWAIT` remains available, while the final owner wakes
 the waiter before a replacement embedded process can start.
+This maintenance release also uses an internal writer-preferring rwlock on
+Apple platforms. Once a writer is queued, later readers cannot barge forever,
+so code-dirty invalidation cannot starve behind sustained concurrent guest
+reads. If `WNOWAIT` has observed a zombie but destructive `waitpid(WNOHANG)`
+temporarily returns zero, the supervisor now retries within the existing
+cleanup deadline while the guest thread group finishes releasing resources,
+rather than incorrectly fail-closing the VM.
 The public C ABI remains version 1; these changes are backward compatible.
 Swift source still does not call
 retain/release; the complete Swift

@@ -878,11 +878,12 @@ struct drain_context {
 
 static void confirm_dirty_reader_would_block(struct asbestos *asbestos,
         pthread_mutex_t *mutex, pthread_cond_t *cond, bool *confirmed) {
-    // Probe the same underlying rwlock immediately before entering the
-    // production invalidation path. The compiler writer is already held, so
-    // EBUSY proves this worker has reached the lock and its next blocking read
-    // cannot pass until the stale block has been published.
-    assert(pthread_rwlock_tryrdlock(&asbestos->dirty_coherence_lock.l) == EBUSY);
+    // Observe only the wrlock API's implementation-independent state before
+    // entering the production invalidation path. The compiler writer is
+    // already held, so this worker's next blocking read cannot pass until the
+    // stale block has been published. Do not reach into the platform-specific
+    // pthread/custom lock representation here.
+    assert(asbestos->dirty_coherence_lock.val == -1);
     assert(pthread_mutex_lock(mutex) == 0);
     *confirmed = true;
     assert(pthread_cond_signal(cond) == 0);

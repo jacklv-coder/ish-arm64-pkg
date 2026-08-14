@@ -15,7 +15,20 @@
   `fs.tar.gz`，环境差异仍保留在外部证据中。CI 不上传制品，候选仍明确标记为未获分发
   批准，不改变 XCFramework Release 的 RootFS 排除策略。
 
-## v0.4.0-abi.11（计划中的 Stage1 维护预发布）
+## v0.4.0-abi.12（计划中的 Stage1 维护预发布）
+
+这是 `v0.4.0-abi.11` 之后的兼容性维护版本，仍是 prerelease，**不是稳定
+v0.4.0**。
+
+- `third_party/ish` 更新到 `6b599fe7`。Apple 平台的内部 `wrlock_t` 改为写者优先实现；
+  一旦写者排队，后到读者不能持续插队，避免代码脏页失效在持续 guest 读负载下饥饿。
+- guest supervisor 在 `WNOWAIT` 已观察到 zombie、但 destructive
+  `waitpid(WNOHANG)` 暂时返回 0 时，会在原清理期限内重试，等待 thread group 完成资源
+  静止，而不是错误地 fail-close VM。
+- 新增锁写者优先、supervisor 延迟 reap 与平台无关测试访问的回归覆盖。公开 C ABI 仍为
+  1，wire protocol 仍为 v4，Swift API 不变；RootFS 不进入 Release。
+
+## v0.4.0-abi.11（已发布的 Stage1 维护预发布）
 
 这是 `v0.4.0-abi.10` 之后的兼容性维护版本，仍是 prerelease，**不是稳定
 v0.4.0**。

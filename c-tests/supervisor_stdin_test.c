@@ -893,6 +893,7 @@ struct waitpid_event {
 static struct waitpid_event test_waitpid_events[4];
 static size_t test_waitpid_event_count;
 static size_t test_waitpid_event_index;
+static size_t test_waitpid_deferred_count;
 
 static int test_waitid(idtype_t idtype, id_t id, siginfo_t *info,
                        int options) {
@@ -923,9 +924,14 @@ static pid_t test_waitpid(pid_t requested, int *status, int options) {
     CHECK(options == WNOHANG);
     CHECK(test_waitpid_event_index < test_waitpid_event_count);
     struct waitpid_event event =
-        test_waitpid_events[test_waitpid_event_index++];
+        test_waitpid_events[test_waitpid_event_index];
     CHECK(requested == event.pid);
     CHECK(event.pid > 0);
+    if (test_waitpid_deferred_count > 0) {
+        test_waitpid_deferred_count--;
+        return 0;
+    }
+    test_waitpid_event_index++;
     if (event.pid > 0 && status) *status = event.status;
     return event.pid;
 }
@@ -963,12 +969,56 @@ static void reset_process_hooks(void) {
     ishsv_test_tcgetpgrp_hook = NULL;
     test_waitpid_event_count = 0;
     test_waitpid_event_index = 0;
+    test_waitpid_deferred_count = 0;
     test_kill_count = 0;
     test_foreground_pgid = 0;
     g_instance_fail_closed = 0;
 #if defined(__linux__)
     ishsv_test_adopted_scan_hook = NULL;
 #endif
+}
+
+/* WNOWAIT may observe the leader zombie before the embedded kernel permits a
+ * destructive reap: the final guest host pthread can still own shared task or
+ * address-space state.  The supervisor must keep the numeric identity pinned
+ * and retry within its deadline, not fail-close the complete VM. */
+static void test_observed_zombie_waits_for_thread_group_quiescence(void) {
+    const pid_t leader_pid = 4050;
+    memset(g_sessions, 0, sizeof(g_sessions));
+    reset_process_hooks();
+    ishsv_test_waitid_hook = test_waitid;
+    ishsv_test_waitpid_hook = test_waitpid;
+    ishsv_test_kill_hook = test_kill;
+
+    struct session *s = &g_sessions[0];
+    s->in_use = 1;
+    s->id = 800;
+    s->pid = leader_pid;
+    s->pgid = leader_pid;
+    s->pgid_validated = 1;
+    s->stdin_fd = -1;
+    s->stdout_fd = -1;
+    s->stderr_fd = -1;
+
+    const struct waitpid_event events[] = {
+        {leader_pid, 9 << 8},
+        {0, 0},
+    };
+    set_waitpid_events(events, sizeof(events) / sizeof(events[0]));
+    test_waitpid_deferred_count = 3;
+
+    reap_children_until(monotonic_ms() + 1000u);
+
+    CHECK(!g_instance_fail_closed);
+    CHECK(test_waitpid_deferred_count == 0);
+    CHECK(s->reaped && s->pid == 0 && s->pgid == 0 &&
+          !s->pgid_validated && s->exit_code == 9);
+    CHECK(test_kill_count == 1);
+    CHECK(test_kill_pids[0] == -leader_pid);
+    CHECK(test_kill_signals[0] == SIGKILL);
+
+    free_session(s);
+    reset_process_hooks();
 }
 
 static void test_host_build_requires_hook_for_instance_cleanup(void) {
@@ -1513,6 +1563,7 @@ int main(void) {
     test_host_build_requires_hook_for_instance_cleanup();
     test_incomplete_shutdown_is_not_acknowledged();
     test_cleanup_failures_do_not_report_success();
+    test_observed_zombie_waits_for_thread_group_quiescence();
     test_reaped_pid_is_not_reused_as_session_identity();
     test_tty_foreground_close_terminates_complete_session();
     test_reaped_leader_cannot_leave_background_group_running();

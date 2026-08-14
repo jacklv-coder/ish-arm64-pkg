@@ -20,7 +20,25 @@ Chinese is the primary changelog and this file is its maintained English mirror.
   explicitly unapproved for distribution without changing the XCFramework
   Release's RootFS exclusion policy.
 
-## v0.4.0-abi.11 (planned Stage1 maintenance prerelease)
+## v0.4.0-abi.12 (planned Stage1 maintenance prerelease)
+
+This is a compatibility maintenance release after `v0.4.0-abi.11`. It remains
+a prerelease and is **not stable v0.4.0**.
+
+- `third_party/ish` advances to `6b599fe7`. The internal Apple-platform
+  `wrlock_t` is now writer-preferring: once a writer queues, later readers
+  cannot barge indefinitely and starve code-dirty invalidation under sustained
+  guest read load.
+- If `WNOWAIT` has observed a zombie but destructive `waitpid(WNOHANG)`
+  temporarily returns zero, the guest supervisor retries within the existing
+  cleanup deadline while the thread group finishes releasing resources rather
+  than incorrectly fail-closing the VM.
+- Regression coverage now includes writer preference, deferred supervisor
+  reap, and platform-independent test access to lock state. The public C ABI
+  remains version 1, wire protocol remains v4, and Swift API is unchanged.
+  RootFS remains outside the Release.
+
+## v0.4.0-abi.11 (published Stage1 maintenance prerelease)
 
 This is a compatibility maintenance release after `v0.4.0-abi.10`. It remains
 a prerelease and is **not stable v0.4.0**.

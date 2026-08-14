@@ -1550,15 +1550,31 @@ static void reap_children_until(uint64_t cleanup_deadline_ms) {
 
         int status;
         pid_t reaped;
-        do {
-            reaped = supervisor_waitpid(pid, &status, WNOHANG);
-        } while (reaped < 0 && errno == EINTR);
-        if (reaped != pid) {
-            if (reaped < 0 && errno != ECHILD)
-                slogf("ishsv: waitpid(%d) failed: %s\n",
-                      (int)pid, strerror(errno));
-            fail_close_instance("cannot reap an observed guest child");
-            return;
+        for (;;) {
+            do {
+                reaped = supervisor_waitpid(pid, &status, WNOHANG);
+            } while (reaped < 0 && errno == EINTR);
+            if (reaped == pid) break;
+            if (reaped < 0) {
+                if (errno != ECHILD)
+                    slogf("ishsv: waitpid(%d) failed: %s\n",
+                          (int)pid, strerror(errno));
+                fail_close_instance("cannot reap an observed guest child");
+                return;
+            }
+
+            /* The embedded kernel can publish a zombie to WNOWAIT before the
+             * final host pthread in that guest thread group has released its
+             * borrowed task/address-space state.  A destructive WNOHANG wait
+             * deliberately returns 0 until that ownership is quiescent.  Keep
+             * the zombie (and therefore its PID/PGID) pinned, then retry under
+             * the same cleanup deadline instead of treating this short-lived
+             * state as a contradictory wait result. */
+            if (monotonic_ms() >= cleanup_deadline_ms) {
+                fail_close_instance("timed out reaping an observed guest child");
+                return;
+            }
+            usleep(1000);
         }
         if (!s) continue;
 

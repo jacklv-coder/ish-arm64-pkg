@@ -13,15 +13,15 @@ RootFS 安装、产品级命令策略、Swift Concurrency 隔离和界面。项�
 
 ## 当前阶段：Native ABI 过渡
 
-当前默认分支已发布 `v0.4.0-abi.10`，正在准备兼容性维护预发布
-`v0.4.0-abi.11`。它们都属于 **Stage1 native ABI 过渡**，不是稳定 `v0.4.0`，
+当前默认分支已发布 `v0.4.0-abi.11`，正在准备兼容性维护预发布
+`v0.4.0-abi.12`。它们都属于 **Stage1 native ABI 过渡**，不是稳定 `v0.4.0`，
 也不是完整 v0.4 Swift API。请同时区分下面四个版本面：
 
-| 版本面 | 当前 `v0.4.0-abi.10` | 计划中的 `v0.4.0-abi.11` |
+| 版本面 | 当前 `v0.4.0-abi.11` | 计划中的 `v0.4.0-abi.12` |
 | --- | --- | --- |
-| 公开 C ABI | `ISH_EMBED_ABI_VERSION == 1`；原子 rename、有限 stdin deadline、单次 stdin timeout 与强制 teardown 生命周期修复已发布 | 仍为 ABI 1；只收紧内部 destructive wait/reap 边界 |
+| 公开 C ABI | `ISH_EMBED_ABI_VERSION == 1`；强制 teardown 与 destructive wait/reap 生命周期修复已发布 | 仍为 ABI 1；只收紧 Apple 内部读写锁与 supervisor 延迟 reap |
 | 内部 wire protocol | host 与内嵌 supervisor 精确匹配 v4 | 仍为 v4；它不是公开 C ABI 版本 |
-| `Package.swift` | 固定已公开的 `v0.4.0-abi.10` URL/checksum | 发布事务生成只改 manifest 的 release commit，固定到维护二进制 |
+| `Package.swift` | 固定已公开的 `v0.4.0-abi.11` URL/checksum | 发布事务生成只改 manifest 的 release commit，固定到维护二进制 |
 | Swift 源 | 保持 v0.3.3 ABI 兼容，已提供类型化 rename 与单次 stdin timeout | 不变 |
 
 Stage1 的 native runtime 已加入 session retain/release、可等待 kernel 线程、soft-halt、
@@ -69,13 +69,13 @@ JIT 脏页一致性必须修改模拟器核心，无法只在 outer package 或 
 窄差异拥有独立 PR、CI 和精确 gitlink，PocketRoot 的构建与发布也因此可复现。我们不会在
 本地直接改写别人维护的上游仓库；适合通用化的修复仍可回馈
 [iSH upstream](https://github.com/ish-app/ish)，但在上游接受并发布前由 fork 承担项目门禁。
-当前 `v0.4.0-abi.11` 源码变更不纳入 RootFS，也不提交任何预构建
+当前 `v0.4.0-abi.12` 源码变更不纳入 RootFS，也不提交任何预构建
 XCFramework/guest binary；二进制只能在后续发布事务通过后生成和发布。
 
 ## 安装状态
 
-`v0.4.0-abi.10` 已公开且当前 [`Package.swift`](Package.swift) 固定到它。
-`v0.4.0-abi.11` 发布前，manifest 继续指向这个已验证的资产，不会提前引用 404 URL。
+`v0.4.0-abi.11` 已公开且当前 [`Package.swift`](Package.swift) 固定到它。
+`v0.4.0-abi.12` 发布前，manifest 继续指向这个已验证的资产，不会提前引用 404 URL。
 在 Xcode 的 **File → Add Package Dependencies…** 中使用：
 
 ```text
@@ -85,11 +85,10 @@ https://github.com/jacklv-coder/ish-arm64-pkg
 请选择明确包含 `libIshKernel.xcframework.zip`、对应源码归档，并且 manifest URL/checksum
 与同一标签匹配的版本。业务工程不需要安装 Meson、Zig 或 LLVM。
 
-`v0.4.0-abi.10` 已提供无 shell 的 guest 原子重命名、有界 stdin deadline、单次
-write/close timeout，以及强制 guest task teardown 与 interval timer、共享 fd、阻塞
-syscall 和 native output worker 之间的生命周期修复。`v0.4.0-abi.11` 会让破坏性 wait
-在完整 thread group 静止后才发布进程退出，避免连续启动 guest process 时复用尚未释放的
-runtime 资源。它不实现原生
+`v0.4.0-abi.11` 已提供无 shell 的 guest 原子重命名、有界 stdin deadline、单次
+write/close timeout、强制 guest task teardown，并让破坏性 wait 在完整 thread group
+静止后才发布进程退出。`v0.4.0-abi.12` 进一步避免 Apple 平台读写锁的写者饥饿，并允许
+supervisor 在已观察 zombie 后有界等待 destructive reap 真正可用。它不实现原生
 Agent Loop，也不会
 在 App 内安装 Codex CLI。Node.js/npm 如有需要仍由
 RootFS/guest 包管理流程选择，不属于 runtime 的强制依赖。
