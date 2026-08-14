@@ -15,7 +15,33 @@
   `fs.tar.gz`，环境差异仍保留在外部证据中。CI 不上传制品，候选仍明确标记为未获分发
   批准，不改变 XCFramework Release 的 RootFS 排除策略。
 
-## v0.4.0-abi.9（计划中的 Stage1 维护预发布）
+## v0.4.0-abi.10（计划中的 Stage1 维护预发布）
+
+这是 `v0.4.0-abi.9` 之后的兼容性维护版本，仍是 prerelease，**不是稳定
+v0.4.0**。
+
+- `third_party/ish` 更新到 `8dd7777a`。强制 guest task 退出现在串行化资源分离、
+  等待仍在运行的 host pthread 完成，并延迟 task/address-space 最终回收；group exit
+  开始后还会拒绝创建新的 `ITIMER_REAL`，避免 timer callback 在 teardown 窗口重新
+  持有即将释放的 task。最终清理还统一采用 `pids_lock -> ptrace.lock` 全局锁顺序，
+  避免与 wait4/ptrace lookup 形成 ABBA 死锁。
+- guest fd table 会跟踪被强制分离的 owner 和每个重复 descriptor 的延迟引用。只有最后
+  一个可运行 owner 退出后才关闭共享 host handle；复制 fd table、并发 close、退出快照
+  后新建 fd 和 `dup*` 扩容都维持明确的所有权与锁顺序，既能唤醒阻塞 syscall，也不会
+  提前关闭仍由外部 owner 使用的 descriptor。
+- poll/socket/futex/condition/vfork/native wait 等阻塞路径现在都会观察强制分离；native
+  output worker 会在 handler 运行前发布并可在终端背压时定向取消，handler 会先恢复
+  cwd、释放 fd/argv，再完成 task 退出。退出流程不再把宿主 `SIGTERM` 当作 pthread
+  终止手段，避免嵌入式 runtime 误杀宿主 App。
+- 嵌入式 halt 会在卸载 RootFS 前等待所有已启动 guest task 完成，并继续跟踪已经从
+  PID 表移除的延迟回收 group。若 10 秒安全期限后仍有任务存活，内核保持 fail-closed
+  并通知宿主；`ish_embed_shutdown` 有界返回 `ISH_ERR_TIMEOUT` 且保留实例，任务稍后
+  退出后可重试 shutdown 完成回收，不会在活跃线程下卸载文件系统。
+- 新增定向 task-lifetime 回归，并已在 iSH fork 的普通、ASan/UBSan、TSan 和 x86
+  配置通过。公开 C ABI 仍为 1，wire protocol 仍为 v4，Swift API 不变；RootFS 不进入
+  Release。
+
+## v0.4.0-abi.9（已发布的 Stage1 维护预发布）
 
 这是 `v0.4.0-abi.8` 之后的兼容性维护版本，仍是 prerelease，**不是稳定
 v0.4.0**。

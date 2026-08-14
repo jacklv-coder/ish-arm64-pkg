@@ -34,6 +34,7 @@ enum fake_mode {
     FAKE_SHUTDOWN_DRAIN,
     FAKE_LOG_BACKPRESSURE,
     FAKE_DOUBLE_SHUTDOWN,
+    FAKE_HALT_WAIT_TIMEOUT,
     FAKE_BROKEN_CONTROL,
     FAKE_ACTIVE_CALL_HOLD,
     FAKE_PROTOCOL_FATAL,
@@ -89,6 +90,8 @@ static pthread_t g_kernel_thread;
 static int g_kernel_started;
 static ish_ffi_exit_cb g_exit_cb;
 static void *g_exit_ctx;
+static ish_ffi_halt_wait_timeout_cb g_halt_wait_timeout_cb;
+static void *g_halt_wait_timeout_ctx;
 static pthread_mutex_t g_fake_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_fake_cond = PTHREAD_COND_INITIALIZER;
 static int g_burst_done;
@@ -97,6 +100,7 @@ static int g_release_borrow;
 static int g_close_done;
 static int g_shutdown_seen;
 static int g_release_shutdown;
+static int g_kernel_finished;
 static int g_shutdown_callers_ready;
 static int g_release_shutdown_callers;
 static int g_control_closed;
@@ -473,6 +477,10 @@ static void fake_finish_kernel(void) {
     if (g_events_w >= 0) { close(g_events_w); g_events_w = -1; }
     if (g_log_w >= 0) { close(g_log_w); g_log_w = -1; }
     if (g_exit_cb) g_exit_cb(0, g_exit_ctx);
+    pthread_mutex_lock(&g_fake_lock);
+    g_kernel_finished = 1;
+    pthread_cond_broadcast(&g_fake_cond);
+    pthread_mutex_unlock(&g_fake_lock);
 }
 
 static void *fake_kernel_main(void *unused) {
@@ -649,6 +657,16 @@ static void *fake_kernel_main(void *unused) {
                     pthread_cond_wait(&g_fake_cond, &g_fake_lock);
                 pthread_mutex_unlock(&g_fake_lock);
             }
+            if (g_mode == FAKE_HALT_WAIT_TIMEOUT) {
+                if (g_halt_wait_timeout_cb)
+                    g_halt_wait_timeout_cb(g_halt_wait_timeout_ctx);
+                pthread_mutex_lock(&g_fake_lock);
+                g_shutdown_seen = 1;
+                pthread_cond_broadcast(&g_fake_cond);
+                while (!g_release_shutdown)
+                    pthread_cond_wait(&g_fake_cond, &g_fake_lock);
+                pthread_mutex_unlock(&g_fake_lock);
+            }
             if (g_mode == FAKE_SHUTDOWN_DRAIN ||
                 g_mode == FAKE_LOG_BACKPRESSURE)
                 fake_emit_shutdown_drain();
@@ -707,6 +725,11 @@ int ish_ffi_task_join(void) {
 void ish_ffi_register_exit_hook(ish_ffi_exit_cb cb, void *ctx) {
     g_exit_cb = cb;
     g_exit_ctx = ctx;
+}
+void ish_ffi_register_halt_wait_timeout_hook(
+        ish_ffi_halt_wait_timeout_cb cb, void *ctx) {
+    g_halt_wait_timeout_cb = cb;
+    g_halt_wait_timeout_ctx = ctx;
 }
 
 /* Test-only hook compiled into host/ishembed.c with ISH_EMBED_TESTING. It
@@ -3495,6 +3518,36 @@ static int test_shutdown_drain(void) {
     return 0;
 }
 
+static int test_halt_wait_timeout_retry(void) {
+    g_mode = FAKE_HALT_WAIT_TIMEOUT;
+    ish_embed_instance_t *inst = boot_instance();
+    uint64_t start = monotonic_ms();
+    int first_rc = ish_embed_shutdown(inst, 4000);
+    uint64_t elapsed = monotonic_ms() - start;
+    int shutdown_seen = wait_fake_flag(&g_shutdown_seen, 1000);
+    if (first_rc != ISH_ERR_TIMEOUT || elapsed > 1000 || !shutdown_seen) {
+        fprintf(stderr,
+                "halt-wait-timeout: first_rc=%d elapsed=%llums seen=%d\n",
+                first_rc, (unsigned long long)elapsed, shutdown_seen);
+        return 1;
+    }
+
+    pthread_mutex_lock(&g_fake_lock);
+    g_release_shutdown = 1;
+    pthread_cond_broadcast(&g_fake_cond);
+    while (!g_kernel_finished)
+        pthread_cond_wait(&g_fake_cond, &g_fake_lock);
+    pthread_mutex_unlock(&g_fake_lock);
+
+    int retry_rc = ish_embed_shutdown(inst, 2000);
+    if (retry_rc != ISH_OK) {
+        fprintf(stderr, "halt-wait-timeout retry: rc=%d\n", retry_rc);
+        return 1;
+    }
+    fprintf(stderr, "halt wait timeout preserves retryable instance: OK\n");
+    return 0;
+}
+
 static int test_log_sink_backpressure(void) {
     g_mode = FAKE_LOG_BACKPRESSURE;
     ish_embed_instance_t *inst = boot_instance();
@@ -3728,7 +3781,7 @@ int main(int argc, char **argv) {
         return 2;
     }
     if (argc != 2) {
-        fprintf(stderr, "usage: %s boot-timeout|bad-hello-ack|install-failure|bundled-supervisor-digest-mismatch|bundled-supervisor-path-mismatch|custom-supervisor|boot-null-output|stdin-close-order|control-frame-limit|control-critical-close|control-same-session-close|control-exited-same-session-close|signal-close-order|resize-close-order|terminate-close-order|control-critical-oneshot|control-preblocked-oneshot|control-byte-limit|control-byte-reserve|control-spawn-gate|control-oneshot-spawn-lock|control-streaming-spawn-lock|control-finite-streaming|control-finite-streaming-write|control-streaming-write-deadline|control-per-write-deadline|control-streaming-queue-deadline|control-streaming-stdin-deadline|control-streaming-precommit-deadline|streaming-instance-gate|supervisor-error|close-race|backlog|frame-backlog|backlog-control-pressure|borrow-shutdown|double-shutdown|active-call|broken-control|protocol-fatal|protocol-fatal-control-pressure|malformed-event TYPE|output-allocation-failure|spawn-argument-bound|shutdown-drain|log-backpressure|oneshot-timeout|oneshot-output|rename-noreplace\n", argv[0]);
+        fprintf(stderr, "usage: %s boot-timeout|bad-hello-ack|install-failure|bundled-supervisor-digest-mismatch|bundled-supervisor-path-mismatch|custom-supervisor|boot-null-output|stdin-close-order|control-frame-limit|control-critical-close|control-same-session-close|control-exited-same-session-close|signal-close-order|resize-close-order|terminate-close-order|control-critical-oneshot|control-preblocked-oneshot|control-byte-limit|control-byte-reserve|control-spawn-gate|control-oneshot-spawn-lock|control-streaming-spawn-lock|control-finite-streaming|control-finite-streaming-write|control-streaming-write-deadline|control-per-write-deadline|control-streaming-queue-deadline|control-streaming-stdin-deadline|control-streaming-precommit-deadline|streaming-instance-gate|supervisor-error|close-race|backlog|frame-backlog|backlog-control-pressure|borrow-shutdown|double-shutdown|active-call|broken-control|protocol-fatal|protocol-fatal-control-pressure|malformed-event TYPE|output-allocation-failure|spawn-argument-bound|shutdown-drain|halt-wait-timeout|log-backpressure|oneshot-timeout|oneshot-output|rename-noreplace\n", argv[0]);
         return 2;
     }
     if (strcmp(argv[1], "boot-timeout") == 0) return test_boot_timeout_cleanup();
@@ -3790,6 +3843,8 @@ int main(int argc, char **argv) {
     if (strcmp(argv[1], "output-allocation-failure") == 0) return test_output_allocation_failure();
     if (strcmp(argv[1], "spawn-argument-bound") == 0) return test_spawn_argument_bound();
     if (strcmp(argv[1], "shutdown-drain") == 0) return test_shutdown_drain();
+    if (strcmp(argv[1], "halt-wait-timeout") == 0)
+        return test_halt_wait_timeout_retry();
     if (strcmp(argv[1], "log-backpressure") == 0) return test_log_sink_backpressure();
     if (strcmp(argv[1], "oneshot-timeout") == 0) return test_oneshot_hard_timeout();
     if (strcmp(argv[1], "oneshot-output") == 0) return test_oneshot_output_limit();

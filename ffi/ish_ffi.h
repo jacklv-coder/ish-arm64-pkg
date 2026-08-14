@@ -77,6 +77,13 @@ int ish_ffi_task_join(void);
 typedef void (*ish_ffi_exit_cb)(int exit_code, void *ctx);
 void ish_ffi_register_exit_hook(ish_ffi_exit_cb cb, void *ctx);
 
+/* Register a callback fired when embedded halt has waited its internal
+ * safety deadline but guest tasks are still draining. The callback is
+ * invoked from the kernel pthread; do not block. */
+typedef void (*ish_ffi_halt_wait_timeout_cb)(void *ctx);
+void ish_ffi_register_halt_wait_timeout_hook(
+    ish_ffi_halt_wait_timeout_cb cb, void *ctx);
+
 #ifdef __cplusplus
 }
 #endif

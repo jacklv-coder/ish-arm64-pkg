@@ -194,6 +194,7 @@ struct ish_embed_instance {
 
     atomic_int      shutting_down;
     atomic_int      kernel_exited;
+    atomic_int      kernel_halt_wait_timed_out;
     pthread_mutex_t lifecycle_lock;
     pthread_cond_t  lifecycle_cond;
     unsigned        active_calls;
@@ -1061,6 +1062,14 @@ static void on_kernel_exit(int code, void *ctx) {
     pthread_mutex_unlock(&inst->lifecycle_lock);
 }
 
+static void on_kernel_halt_wait_timed_out(void *ctx) {
+    ish_embed_instance_t *inst = (ish_embed_instance_t *)ctx;
+    pthread_mutex_lock(&inst->lifecycle_lock);
+    atomic_store(&inst->kernel_halt_wait_timed_out, 1);
+    pthread_cond_broadcast(&inst->lifecycle_cond);
+    pthread_mutex_unlock(&inst->lifecycle_lock);
+}
+
 static void close_fd_slot(int *fd) {
     if (*fd >= 0) {
         close(*fd);
@@ -1101,6 +1110,40 @@ static int wait_for_kernel_exit(ish_embed_instance_t *inst, uint32_t wait_ms) {
     int exited = atomic_load(&inst->kernel_exited);
     pthread_mutex_unlock(&inst->lifecycle_lock);
     return exited;
+}
+
+enum kernel_shutdown_wait_result {
+    KERNEL_SHUTDOWN_WAIT_DEADLINE = 0,
+    KERNEL_SHUTDOWN_WAIT_EXITED = 1,
+    KERNEL_SHUTDOWN_WAIT_HALT_TIMEOUT = 2,
+};
+
+static enum kernel_shutdown_wait_result wait_for_kernel_shutdown(
+        ish_embed_instance_t *inst, uint32_t wait_ms) {
+    struct timespec deadline;
+    clock_gettime(CLOCK_REALTIME, &deadline);
+    deadline.tv_sec += wait_ms / 1000;
+    deadline.tv_nsec += (long)(wait_ms % 1000) * 1000000L;
+    if (deadline.tv_nsec >= 1000000000L) {
+        deadline.tv_nsec -= 1000000000L;
+        deadline.tv_sec += 1;
+    }
+
+    pthread_mutex_lock(&inst->lifecycle_lock);
+    while (!atomic_load(&inst->kernel_exited) &&
+           !atomic_load(&inst->kernel_halt_wait_timed_out)) {
+        int rc = pthread_cond_timedwait(&inst->lifecycle_cond,
+                                        &inst->lifecycle_lock, &deadline);
+        if (rc == ETIMEDOUT) break;
+    }
+    enum kernel_shutdown_wait_result result = KERNEL_SHUTDOWN_WAIT_DEADLINE;
+    /* Completion wins if both callbacks raced: it is safe to join and free. */
+    if (atomic_load(&inst->kernel_exited))
+        result = KERNEL_SHUTDOWN_WAIT_EXITED;
+    else if (atomic_load(&inst->kernel_halt_wait_timed_out))
+        result = KERNEL_SHUTDOWN_WAIT_HALT_TIMEOUT;
+    pthread_mutex_unlock(&inst->lifecycle_lock);
+    return result;
 }
 
 static int join_instance_threads(ish_embed_instance_t *inst) {
@@ -1201,6 +1244,7 @@ int ish_embed_boot(const ish_embed_boot_opts_t *opts,
     atomic_store(&inst->next_session_id, 1);
     atomic_store(&inst->shutting_down, 0);
     atomic_store(&inst->kernel_exited, 0);
+    atomic_store(&inst->kernel_halt_wait_timed_out, 0);
     atomic_store(&inst->writer_stopping, 0);
     atomic_store(&inst->writer_stop_status, ISH_ERR_NOT_RUNNING);
     atomic_store(&inst->log_stopping, 0);
@@ -1308,6 +1352,8 @@ int ish_embed_boot(const ish_embed_boot_opts_t *opts,
 
     /* register exit hook BEFORE task_start so we don't race */
     ish_ffi_register_exit_hook(on_kernel_exit, inst);
+    ish_ffi_register_halt_wait_timeout_hook(
+        on_kernel_halt_wait_timed_out, inst);
     exit_hook_registered = 1;
 
     /* Build packed argv: just argv[0]=sup, NUL term + outer NUL */
@@ -1440,7 +1486,10 @@ fail:;
     close_fd_slot(&inst->guest_stdout_w);
     close_fd_slot(&inst->guest_stderr_w);
     close_fd_slot(&inst->kernel_log_fd);
-    if (exit_hook_registered) ish_ffi_register_exit_hook(NULL, NULL);
+    if (exit_hook_registered) {
+        ish_ffi_register_halt_wait_timeout_hook(NULL, NULL);
+        ish_ffi_register_exit_hook(NULL, NULL);
+    }
     destroy_instance_primitives(inst);
     free(inst->supervisor_guest_path);
     free(inst);
@@ -2443,11 +2492,19 @@ int ish_embed_shutdown(ish_embed_instance_t *inst, uint32_t grace_ms) {
         close_control_pipe(inst);
 
     uint32_t polite_wait = grace_ms ? grace_ms : 5000;
-    if (!wait_for_kernel_exit(inst, polite_wait)) {
+    enum kernel_shutdown_wait_result wait_result =
+        wait_for_kernel_shutdown(inst, polite_wait);
+    if (wait_result != KERNEL_SHUTDOWN_WAIT_EXITED) {
         /* EOF is the supervisor's second, protocol-independent shutdown
-         * path. halt_system itself has a bounded 10-second reap loop. */
+         * path. If halt's safety deadline fires, preserve the live instance
+         * so the caller can retry after guest tasks finish draining. */
         close_control_pipe(inst);
-        if (!wait_for_kernel_exit(inst, 15000)) {
+        if (wait_result == KERNEL_SHUTDOWN_WAIT_HALT_TIMEOUT) {
+            pthread_mutex_unlock(&g_instance_lock);
+            return ISH_ERR_TIMEOUT;
+        }
+        wait_result = wait_for_kernel_shutdown(inst, 15000);
+        if (wait_result != KERNEL_SHUTDOWN_WAIT_EXITED) {
             pthread_mutex_unlock(&g_instance_lock);
             return ISH_ERR_TIMEOUT;
         }
@@ -2460,6 +2517,7 @@ int ish_embed_shutdown(ish_embed_instance_t *inst, uint32_t grace_ms) {
     close_fd_slot(&inst->guest_to_host_r);
     close_fd_slot(&inst->guest_log_r);
     close_fd_slot(&inst->kernel_log_fd);
+    ish_ffi_register_halt_wait_timeout_hook(NULL, NULL);
     ish_ffi_register_exit_hook(NULL, NULL);
     destroy_instance_primitives(inst);
 
