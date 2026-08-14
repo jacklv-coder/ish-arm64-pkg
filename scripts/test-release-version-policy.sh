@@ -6,11 +6,11 @@ PKG_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck source=release-version-policy.sh
 source "$PKG_ROOT/scripts/release-version-policy.sh"
 
-ish_release_stage1_version_allowed v0.4.0-abi.10 || {
+ish_release_stage1_version_allowed v0.4.0-abi.11 || {
     printf 'error: authorized Stage1 maintenance tag was rejected\n' >&2
     exit 1
 }
-for forbidden in v0.4.0 v0.4.0-abi.1 v0.4.0-abi.2 v0.4.0-abi.3 v0.4.0-abi.4 v0.4.0-abi.5 v0.4.0-abi.6 v0.4.0-abi.7 v0.4.0-abi.8 v0.4.0-abi.9 v0.4.0-rc.1 v1.2.3; do
+for forbidden in v0.4.0 v0.4.0-abi.1 v0.4.0-abi.2 v0.4.0-abi.3 v0.4.0-abi.4 v0.4.0-abi.5 v0.4.0-abi.6 v0.4.0-abi.7 v0.4.0-abi.8 v0.4.0-abi.9 v0.4.0-abi.10 v0.4.0-rc.1 v1.2.3; do
     if ish_release_stage1_version_allowed "$forbidden"; then
         printf 'error: Stage1 policy unexpectedly allowed %s\n' "$forbidden" >&2
         exit 1
@@ -29,12 +29,12 @@ assert_prerelease_flag() {
     }
 }
 
-assert_prerelease_flag v0.4.0-abi.10 true
+assert_prerelease_flag v0.4.0-abi.11 true
 assert_prerelease_flag v1.2.3-rc.1 true
 assert_prerelease_flag v0.4.0 false
 assert_prerelease_flag v1.2.3 false
 
-abi_notes="$(ish_release_abi_transition_notes v0.4.0-abi.10)"
+abi_notes="$(ish_release_abi_transition_notes v0.4.0-abi.11)"
 for expected in \
     '这不是稳定 v0.4' \
     'This is not stable v0.4' \
@@ -60,6 +60,11 @@ for expected in \
     'Native output workers are published' \
     'terminal backpressure' \
     'Host `SIGTERM` is no longer used' \
+    '破坏性 guest wait' \
+    '`WNOWAIT` 仍可用于观察' \
+    'Destructive guest waits' \
+    'Observational `WNOWAIT`' \
+    'replacement embedded process' \
     'public C ABI remains version 1' \
     'Stage2' \
     'does not contain a RootFS'; do
