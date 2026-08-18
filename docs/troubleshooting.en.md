@@ -29,8 +29,8 @@ checksum, and RootFS provenance, size, and SHA-256. Without this matrix, logs
 may describe different states.
 
 The current correct combination is C ABI 1, wire v4, Swift not calling
-retain/release, and a manifest pointing at the public `v0.4.0-abi.11`. After
-`v0.4.0-abi.12` publication, only the manifest URL/checksum should switch to the
+retain/release, and a manifest pointing at the public `v0.4.0-abi.12`. After
+`v0.4.0-abi.13` publication, only the manifest URL/checksum should switch to the
 maintenance asset.
 
 ## Missing retain/release or other link symbols
@@ -47,24 +47,24 @@ nm -gU path/to/libIshKernel.a | awk '{print $NF}' | sort -u \
   old-ABI-compatible Swift layer rather than expanding this maintenance release.
 - If a local Stage1 XCFramework lacks them, it was built from an old commit,
   gitlink, or cache. Rebuild in an isolated path.
-- If `v0.4.0-abi.12` is public but the manifest is still `v0.4.0-abi.11`, inspect
+- If `v0.4.0-abi.13` is public but the manifest is still `v0.4.0-abi.12`, inspect
   whether the release commit/default-branch fast-forward completed. Never guess
   a checksum.
 
 ## `Package.swift` looks “not updated”
 
-Between the maintenance PR merge and Release publication, a `v0.4.0-abi.11`
+Between the maintenance PR merge and Release publication, a `v0.4.0-abi.12`
 manifest pin is expected. The release script rebuilds and validates assets from
 the merged commit, creates a manifest-only release commit, publishes and
 verifies assets, then fast-forwards the default branch. Thus the branch never
 advertises a 404 URL.
 
-Only after confirming that the `v0.4.0-abi.12` Release is public is an old
+Only after confirming that the `v0.4.0-abi.13` Release is public is an old
 manifest abnormal:
 
 ```sh
-gh release view v0.4.0-abi.12 --repo jacklv-coder/ish-arm64-pkg
-git ls-remote --tags origin refs/tags/v0.4.0-abi.12
+gh release view v0.4.0-abi.13 --repo jacklv-coder/ish-arm64-pkg
+git ls-remote --tags origin refs/tags/v0.4.0-abi.13
 git fetch origin
 git log --oneline --decorate -5 origin/main
 ```
@@ -116,9 +116,10 @@ cannot confirm cleanup, or a later command cannot recover.
   finite-session stdin write/close share one absolute deadline. `v0.4.0-abi.9`
   adds per-call stdin write/close timeout APIs. Published `v0.4.0-abi.10` fixes
   forced task-teardown lifetime races. Published `v0.4.0-abi.11` delays a
-  destructive wait until the full thread group is quiescent. Planned
-  `v0.4.0-abi.12` fixes Apple writer starvation and retries a briefly deferred
-  destructive reap; none changes guest
+  destructive wait until the full thread group is quiescent. `v0.4.0-abi.12`
+  fixes Apple writer starvation and retries a briefly deferred destructive
+  reap. Planned `v0.4.0-abi.13` adds AArch64 AdvSIMD vector `REV16` emulation;
+  none changes guest
   signal semantics.
 - Source validation should run iSH's `internal-signal-mask` test, package-level
   host/iOS tests, and a real-RootFS “cancel → native termination confirmed →
