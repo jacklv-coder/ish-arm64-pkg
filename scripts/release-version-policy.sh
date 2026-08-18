@@ -5,7 +5,7 @@
 # existing tag and accidentally creating a stable tag before Stage2 is
 # integrated and separately authorized.
 ish_release_stage1_version_allowed() {
-    [[ "$1" == "v0.4.0-abi.13" ]]
+    [[ "$1" == "v0.4.0-abi.14" ]]
 }
 
 # Call only after the release entry point has validated strict SemVer.
@@ -54,6 +54,10 @@ waiter，避免 replacement embedded process 过早复用 runtime。
 本维护版还补齐 AArch64 AdvSIMD `REV16` 向量指令：64 位 `.8B` 形式遵循架构语义清零
 目标寄存器高 64 位，128 位 `.16B` 形式交换每个 16 位元素内的两个字节。该指令会在
 Rust/TLS 网络路径中出现，缺失时 guest 会以 `SIGILL` 退出。
+本维护版还修正 Darwin 宿主上的 Linux socket 地址布局转换。runtime 会先保留 guest
+`sockaddr` 的 Linux 16 位 address family，再按 Apple ABI 写入 `sa_len`/`sa_family`；
+重写 Unix-domain 路径后也会重新计算 `sun_len`。`bind`、`connect` 与 `sendto` 共用这条
+转换路径，避免 Darwin 把 Linux family 字节误读成长度而导致网络请求失败。
 公开 C ABI 版本仍为 1；这些变更向后兼容。Swift 源仍不调用 retain/release；
 完整 Swift lifecycle、类型化状态与 Terminal/VT 改造将在 Stage2 交付。
 本 Release 不包含 RootFS，发布脚本也不会上传 RootFS。
@@ -99,6 +103,12 @@ instruction. The 64-bit `.8B` form clears the destination register's upper
 64 bits as required by the architecture, while `.16B` swaps the two bytes in
 every 16-bit element. Rust/TLS network paths can emit this instruction; without
 it, the guest exits with `SIGILL`.
+This maintenance release also corrects Linux socket-address translation on
+Darwin hosts. The runtime preserves the guest `sockaddr`'s 16-bit Linux address
+family before writing Apple ABI `sa_len`/`sa_family`, and recomputes `sun_len`
+after rewriting Unix-domain paths. `bind`, `connect`, and `sendto` share this
+conversion path so Darwin cannot misread Linux family bytes as a length and
+break network requests.
 The public C ABI remains version 1; these changes are backward compatible.
 Swift source still does not call
 retain/release; the complete Swift

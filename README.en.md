@@ -15,16 +15,16 @@ and simulator slices are arm64.
 
 ## Current phase: native ABI transition
 
-The default branch has published `v0.4.0-abi.12` and is preparing the compatible
-maintenance prerelease `v0.4.0-abi.13`. Both belong to the Stage1 **native ABI
+The default branch has published `v0.4.0-abi.13` and is preparing the compatible
+maintenance prerelease `v0.4.0-abi.14`. Both belong to the Stage1 **native ABI
 transition**. Neither is stable `v0.4.0` or the complete v0.4 Swift API. Keep
 these four version surfaces distinct:
 
-| Surface | Current `v0.4.0-abi.12` | Planned `v0.4.0-abi.13` |
+| Surface | Current `v0.4.0-abi.13` | Planned `v0.4.0-abi.14` |
 | --- | --- | --- |
-| Public C ABI | `ISH_EMBED_ABI_VERSION == 1`; forced teardown, destructive wait/reap, and Apple lock fixes are public | Still ABI 1; only internal AArch64 AdvSIMD `REV16` emulation is added |
+| Public C ABI | `ISH_EMBED_ABI_VERSION == 1`; lifecycle, Apple lock, and AArch64 `REV16` fixes are public | Still ABI 1; only Darwin/Linux `sockaddr` layout conversion is corrected |
 | Internal wire protocol | exact-match v4 between host and embedded supervisor | still v4; this is not the public C ABI version |
-| `Package.swift` | pins the public `v0.4.0-abi.12` URL/checksum | the release transaction creates a manifest-only release commit pinned to the maintenance binary |
+| `Package.swift` | pins the public `v0.4.0-abi.13` URL/checksum | the release transaction creates a manifest-only release commit pinned to the maintenance binary |
 | Swift source | remains v0.3.3-ABI compatible and includes typed rename plus per-call stdin timeouts | unchanged |
 
 Stage1 native code adds session retain/release, a joinable kernel thread,
@@ -90,15 +90,15 @@ gives those narrow differences independent PRs, CI, and an exact gitlink, making
 PocketRoot builds and releases reproducible. We do not directly rewrite somebody
 else's local upstream repository; generally useful fixes can still be contributed
 to [iSH upstream](https://github.com/ish-app/ish), while the fork carries project
-gates until upstream accepts and releases them. The current `v0.4.0-abi.13`
+gates until upstream accepts and releases them. The current `v0.4.0-abi.14`
 source change includes neither RootFS content nor any prebuilt XCFramework/guest
 binary; binaries may be produced and published only by a later release
 transaction after its gates pass.
 
 ## Installation status
 
-`v0.4.0-abi.12` is public and [`Package.swift`](Package.swift) currently pins it.
-Until `v0.4.0-abi.13` is published, the manifest keeps pointing at that verified
+`v0.4.0-abi.13` is public and [`Package.swift`](Package.swift) currently pins it.
+Until `v0.4.0-abi.14` is published, the manifest keeps pointing at that verified
 asset instead of advertising a future 404 URL. Use Xcode's
 **File → Add Package Dependencies…** with:
 
@@ -110,12 +110,12 @@ Select a version whose tag, `libIshKernel.xcframework.zip`, Corresponding Source
 and manifest URL/checksum all match. Consumer projects do not need Meson, Zig,
 or LLVM.
 
-`v0.4.0-abi.12` provides guest-atomic rename without a shell, bounded stdin
-deadlines, per-call write/close timeouts, forced guest-task teardown,
-thread-group quiescence boundaries, and an Apple writer-preferring lock.
-`v0.4.0-abi.13` adds the AArch64 AdvSIMD vector `REV16` instruction used by
-Rust/TLS network paths so an otherwise valid guest no longer exits with
-`SIGILL`. It does not
+`v0.4.0-abi.13` provides guest-atomic rename without a shell, bounded stdin
+deadlines, per-call write/close timeouts, lifecycle fixes, an Apple
+writer-preferring lock, and AArch64 AdvSIMD `REV16`.
+`v0.4.0-abi.14` corrects `sa_len`/`sa_family` translation when Linux guest socket
+addresses enter Darwin APIs, preventing `bind`, `connect`, and `sendto` from
+using a misread family. It does not
 implement a native Agent Loop or
 install Codex CLI in the app.
 Node.js/npm remain optional choices of the RootFS/guest package-management flow,
