@@ -160,8 +160,9 @@ jobs:
             -Db_lundef=false
           # The chain executable already depends on libish + libish_emu; fakefs
           # is the only additional archive consumed by the outer Meson build.
-          meson compile -C build-ci-ish dirty-page-chain-test fakefs
+          meson compile -C build-ci-ish arm64-neon-reverse-test dirty-page-chain-test fakefs
           meson test -C build-ci-ish --print-errorlogs --repeat 5 \
+            arm64-neon-reverse \
             dirty-page-chain
           meson setup build-ci \
             -Dish_src="$PWD/third_party/ish" \

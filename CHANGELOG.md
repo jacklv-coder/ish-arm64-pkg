@@ -15,7 +15,18 @@
   `fs.tar.gz`，环境差异仍保留在外部证据中。CI 不上传制品，候选仍明确标记为未获分发
   批准，不改变 XCFramework Release 的 RootFS 排除策略。
 
-## v0.4.0-abi.12（计划中的 Stage1 维护预发布）
+## v0.4.0-abi.13（计划中的 Stage1 维护预发布）
+
+这是 `v0.4.0-abi.12` 之后的兼容性维护版本，仍是 prerelease，**不是稳定
+v0.4.0**。
+
+- `third_party/ish` 更新到 `b61c2147`，补齐 AArch64 AdvSIMD `REV16` 向量指令。`.8B` 与 `.16B` 形式均按
+  架构语义交换每个 16 位元素内的两个字节；64 位形式同时清零目标向量高 64 位。
+- 修复 Rust/TLS 网络路径执行 `REV16 Vd.16B, Vn.16B` 时 guest 以 `SIGILL` 退出的问题，
+  并为导致真机失败的指令族增加 64/128 位定向回归测试及显式 CI 门禁。
+- 公开 C ABI 仍为 1，wire protocol 仍为 v4，Swift API 不变；RootFS 不进入 Release。
+
+## v0.4.0-abi.12（已发布的 Stage1 维护预发布）
 
 这是 `v0.4.0-abi.11` 之后的兼容性维护版本，仍是 prerelease，**不是稳定
 v0.4.0**。

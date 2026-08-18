@@ -20,7 +20,23 @@ Chinese is the primary changelog and this file is its maintained English mirror.
   explicitly unapproved for distribution without changing the XCFramework
   Release's RootFS exclusion policy.
 
-## v0.4.0-abi.12 (planned Stage1 maintenance prerelease)
+## v0.4.0-abi.13 (planned Stage1 maintenance prerelease)
+
+This is a compatibility maintenance release after `v0.4.0-abi.12`. It remains
+a prerelease and is **not stable v0.4.0**.
+
+- `third_party/ish` advances to `b61c2147` and adds the AArch64 AdvSIMD vector
+  `REV16` instruction. The
+  `.8B` and `.16B` forms swap the two bytes in every 16-bit element, and the
+  64-bit form also clears the destination vector's upper 64 bits.
+- Rust/TLS network paths no longer terminate the guest with `SIGILL` when they
+  execute `REV16 Vd.16B, Vn.16B`. Focused 64-bit and 128-bit regressions cover
+  the instruction family that failed on a physical device, with an explicit CI
+  gate.
+- The public C ABI remains version 1, wire protocol remains v4, and Swift API is
+  unchanged. RootFS remains outside the Release.
+
+## v0.4.0-abi.12 (published Stage1 maintenance prerelease)
 
 This is a compatibility maintenance release after `v0.4.0-abi.11`. It remains
 a prerelease and is **not stable v0.4.0**.
