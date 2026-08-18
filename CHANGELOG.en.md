@@ -20,7 +20,22 @@ Chinese is the primary changelog and this file is its maintained English mirror.
   explicitly unapproved for distribution without changing the XCFramework
   Release's RootFS exclusion policy.
 
-## v0.4.0-abi.13 (planned Stage1 maintenance prerelease)
+## v0.4.0-abi.14 (planned Stage1 maintenance prerelease)
+
+This is a compatible maintenance release after `v0.4.0-abi.13`. It remains a
+prerelease and is **not stable v0.4.0**.
+
+- `third_party/ish` advances to `22f6b858`. Before a guest `sockaddr` enters a
+  Darwin socket API, the runtime now preserves the Linux 16-bit address family
+  and then writes Apple ABI `sa_len`/`sa_family`; it also recomputes `sun_len`
+  after rewriting Unix-domain paths.
+- `bind`, `connect`, and `sendto` share the same conversion path. This fixes
+  network requests that failed when Darwin interpreted Linux family bytes as a
+  length, with a standalone layout regression gated on macOS and Linux CI.
+- The public C ABI remains 1, wire protocol remains v4, and the Swift API is
+  unchanged. RootFS is not included in the Release.
+
+## v0.4.0-abi.13 (published Stage1 maintenance prerelease)
 
 This is a compatibility maintenance release after `v0.4.0-abi.12`. It remains
 a prerelease and is **not stable v0.4.0**.

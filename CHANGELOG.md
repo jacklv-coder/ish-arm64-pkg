@@ -15,7 +15,19 @@
   `fs.tar.gz`，环境差异仍保留在外部证据中。CI 不上传制品，候选仍明确标记为未获分发
   批准，不改变 XCFramework Release 的 RootFS 排除策略。
 
-## v0.4.0-abi.13（计划中的 Stage1 维护预发布）
+## v0.4.0-abi.14（计划中的 Stage1 维护预发布）
+
+这是 `v0.4.0-abi.13` 之后的兼容性维护版本，仍是 prerelease，**不是稳定
+v0.4.0**。
+
+- `third_party/ish` 更新到 `22f6b858`。guest `sockaddr` 进入 Darwin socket API 前会先
+  保留 Linux 16 位 address family，再按 Apple ABI 写入 `sa_len`/`sa_family`；重写
+  Unix-domain 路径后也会重新计算 `sun_len`。
+- `bind`、`connect` 与 `sendto` 共用同一转换路径，修复网络请求因 Darwin 把 Linux
+  family 字节误读成长度而失败的问题；新增独立布局回归并纳入 macOS/Linux CI。
+- 公开 C ABI 仍为 1，wire protocol 仍为 v4，Swift API 不变；RootFS 不进入 Release。
+
+## v0.4.0-abi.13（已发布的 Stage1 维护预发布）
 
 这是 `v0.4.0-abi.12` 之后的兼容性维护版本，仍是 prerelease，**不是稳定
 v0.4.0**。
